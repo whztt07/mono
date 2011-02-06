@@ -2890,6 +2890,247 @@ mono_assembly_close_finish (MonoAssembly *assembly)
 	}
 }
 
+#include <mono/metadata/tokentype.h>
+#include <mono/mini/mini.h>
+
+static void
+    deregister_reflection_info_roots_nspace_table (gpointer key, gpointer value, gpointer image)
+{
+    guint32 index = GPOINTER_TO_UINT (value);
+    MonoClass *class = mono_class_get (image, MONO_TOKEN_TYPE_DEF | index);
+
+    g_assert (class);
+
+    mono_class_free_ref_info (class);
+}
+
+static void
+    deregister_reflection_info_roots_name_space (gpointer key, gpointer value, gpointer user_data)
+{
+    g_hash_table_foreach (value, deregister_reflection_info_roots_nspace_table, user_data);
+}
+
+static void
+    deregister_reflection_info_roots_from_list (MonoImage *image)
+{
+    GSList *list = image->reflection_info_unregister_classes;
+
+    while (list) {
+        MonoClass *class = list->data;
+
+        mono_class_free_ref_info (class);
+
+        list = list->next;
+    }
+
+    g_slist_free (image->reflection_info_unregister_classes);
+    image->reflection_info_unregister_classes = NULL;
+}
+
+static void
+    deregister_reflection_info_roots (MonoDomain *domain, MonoAssembly* assembly)
+{
+    GSList *list;
+
+    mono_loader_lock ();
+    mono_domain_assemblies_lock (domain);
+    //for (list = domain->domain_assemblies; list; list = list->next) {
+    {
+        //MonoAssembly *assembly = list->data;
+        MonoImage *image = assembly->image;
+        int i;
+        /*No need to take the image lock here since dynamic images are appdomain bound and at this point the mutator is gone.*/
+        if (image->name_cache)
+            g_hash_table_foreach (image->name_cache, deregister_reflection_info_roots_name_space, image);
+        deregister_reflection_info_roots_from_list (image);
+        for (i = 0; i < image->module_count; ++i) {
+            MonoImage *module = image->modules [i];
+            if (module) {
+                if (module->dynamic && module->name_cache) {
+                    g_hash_table_foreach (module->name_cache,
+                        deregister_reflection_info_roots_name_space, module);
+                }
+                deregister_reflection_info_roots_from_list (module);
+            }
+        }
+    }
+    mono_domain_assemblies_unlock (domain);
+    mono_loader_unlock ();
+}
+
+static void
+clear_domain_method (gpointer key, gpointer value, gpointer data)
+{
+    MonoDomain* domain = data;
+	MonoMethod* method = value;
+
+    mono_domain_lock (domain);
+    g_hash_table_remove (domain_jit_info (domain)->dynamic_code_hash, method);
+    if (mono_internal_hash_table_lookup(&domain->jit_code_hash, method) != NULL)
+    {
+        mono_internal_hash_table_remove (&domain->jit_code_hash, method);
+    }
+    g_hash_table_remove (domain_jit_info (domain)->jump_trampoline_hash, method);
+    g_hash_table_remove (domain_jit_info (domain)->runtime_invoke_hash, method);
+    mono_domain_unlock (domain);
+
+    //method->dynamic = 1;
+    //mono_runtime_free_method(domain, method);
+}
+
+gboolean method_rgctx_is_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+    MonoAssembly* assembly = user_data;
+    MonoMethodRuntimeGenericContext *mrgctx = value;
+	int i;
+
+	for (i = 0; i < mrgctx->method_inst->type_argc; ++i) {
+		MonoClass* klass = mono_class_from_mono_type(mrgctx->method_inst->type_argv[i]);
+		if (klass->image == assembly->image) {
+			return TRUE;
+		}
+	}
+
+    return (mrgctx->class_vtable->klass->image == assembly->image);
+}
+
+typedef struct _GenericVirtualCase {
+    MonoMethod *method;
+} GenericVirtualCase;
+
+gboolean gvc_is_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+    MonoAssembly* assembly = user_data;
+    GenericVirtualCase* gvc = value;
+
+    return (gvc->method->klass->image == assembly->image);
+}
+
+gboolean type_is_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+	MonoAssembly* assembly = user_data;
+	MonoType *type = (MonoType*)key;
+    MonoGenericContext* context;
+
+	MonoClass* klass = mono_class_from_mono_type(type);
+
+    if (type->type == MONO_TYPE_GENERICINST) {
+        context = &type->data.generic_class->context;
+        if (context->class_inst) {
+            int i;
+            for (i = 0; i < context->class_inst->type_argc; ++i) {
+                MonoClass* klass = mono_class_from_mono_type(context->class_inst->type_argv[i]);
+                if (klass->image == assembly->image) {
+                    return TRUE;
+                }
+            }
+        }
+    }
+    //printf("Unloading %i type %x (name %s)\n", klass->image == assembly->image ? 1 : 0, type, klass->name);
+	return (klass->image == assembly->image);
+}
+
+gboolean klass_is_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+	MonoAssembly* assembly = user_data;
+	MonoClass *klass = (MonoType*)key;
+	MonoGenericContext* context;
+
+	MonoType* type = mono_class_get_type(klass);
+
+	if (type->type == MONO_TYPE_GENERICINST) {
+		context = &type->data.generic_class->context;
+		if (context->class_inst) {
+			int i;
+			for (i = 0; i < context->class_inst->type_argc; ++i) {
+				MonoClass* klass = mono_class_from_mono_type(context->class_inst->type_argv[i]);
+				if (klass->image == assembly->image) {
+					return TRUE;
+				}
+			}
+		}
+	}
+	//printf("Unloading %i type %x (name %s)\n", klass->image == assembly->image ? 1 : 0, type, klass->name);
+	return (klass->image == assembly->image);
+}
+gboolean template_rgctx_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+	MonoClass *class = key;
+	MonoRuntimeGenericContextTemplate *rgctx_template = value;
+	MonoRuntimeGenericContextOtherInfoTemplate *oti;
+	guint32 max_argc, type_argc, i, num_entries;
+	MonoDomain* domain = mono_domain_get();
+
+	oti = rgctx_template->other_infos;
+
+	printf("RGCTX: Processing class %s\n", class->name);
+	max_argc = g_slist_length (rgctx_template->method_templates);
+
+	for (type_argc = 0; type_argc <= max_argc; ++type_argc) {
+		MonoRuntimeGenericContextOtherInfoTemplate* oti =
+			type_argc == 0
+			? rgctx_template->other_infos
+			: g_slist_nth_data (rgctx_template->method_templates, type_argc - 1);
+		for (; oti; oti = oti->next)
+		{
+			printf("OTI: data: %x infotype %i\n", oti->data, oti->info_type);
+			if (oti->info_type == MONO_RGCTX_INFO_KLASS)
+			{
+				MonoClass* argClass = mono_class_from_mono_type(oti->data);
+				printf("OTI: %s\n", argClass->name);
+			}
+			else if (oti->info_type == MONO_RGCTX_INFO_REFLECTION_TYPE)
+			{
+				MonoClass* class2;
+				MonoClass* class3;
+				MonoReflectionType* type;
+				type = mono_type_get_object (domain, oti->data);
+				class2 = mono_class_from_mono_type(oti->data);
+				class3 = mono_class_from_mono_type(type->type);
+				printf("OTI: %s\n", class2->name);
+			}
+		}
+	}
+
+	//return (mrgctx->class_vtable->klass->image == assembly->image);
+	return FALSE;
+}
+
+static void
+delete_jump_list (gpointer key, gpointer value, gpointer user_data)
+{
+	g_slist_free (value);
+}
+
+static void
+dynamic_method_info_free (gpointer key, gpointer value, gpointer user_data)
+{
+	MonoJitDynamicMethodInfo *di = value;
+	mono_code_manager_destroy (di->code_mp);
+	g_free (di);
+}
+
+gboolean method_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+	MonoMethod *method = key;
+	MonoAssembly *assembly = user_data;
+
+	if (method->is_inflated) {
+		MonoGenericContext *context = mono_method_get_context (method);
+		if (context->method_inst) {
+			int i;
+			for (i = 0; i < context->method_inst->type_argc; ++i) {
+				MonoClass* klass = mono_class_from_mono_type(context->method_inst->type_argv[i]);
+				if (klass->image == assembly->image) {
+					return TRUE;
+				}
+			}
+		}
+	}
+
+	return (method->klass->image == assembly->image);
+}
+
 /**
  * mono_assembly_close:
  * @assembly: the assembly to release.
@@ -2900,7 +3141,53 @@ mono_assembly_close_finish (MonoAssembly *assembly)
 void
 mono_assembly_close (MonoAssembly *assembly)
 {
-	if (mono_assembly_close_except_image_pools (assembly))
+    MonoDomain* domain = mono_domain_get();
+    if (domain && domain->env != NULL) {
+		GSList *tmp;
+		mono_domain_lock (domain);
+
+        mono_g_hash_table_foreach_remove (domain->type_hash, type_is_in_assembly, assembly);
+
+        deregister_reflection_info_roots(domain, assembly);
+        g_hash_table_foreach (assembly->image->method_cache, clear_domain_method, domain);
+		
+		// Probably not necessary
+		/*for (tmp = domain->domain_assemblies; tmp; tmp = tmp->next) {
+			MonoAssembly* ass = tmp->data;
+			if (ass->image->rgctx_template_hash)
+			{
+				g_hash_table_foreach_remove(ass->image->rgctx_template_hash, template_rgctx_in_assembly, 0);
+			}
+		}*/
+
+        domain->domain_assemblies = g_slist_remove(domain->domain_assemblies, assembly);
+        g_hash_table_foreach_remove(domain->method_rgctx_hash, method_rgctx_is_in_assembly, assembly);
+		
+		// Not tested
+        g_hash_table_foreach_remove(domain->generic_virtual_cases, gvc_is_in_assembly, assembly);
+	
+		//g_hash_table_destroy (info->class_init_trampoline_hash);
+		//if (info->static_rgctx_trampoline_hash)
+		//	g_hash_table_destroy (info->static_rgctx_trampoline_hash);
+		//g_hash_table_destroy (info->llvm_vcall_trampoline_hash);
+		//g_hash_table_destroy (info->runtime_invoke_hash);
+		//g_hash_table_destroy (info->seq_points);
+		//g_hash_table_destroy (info->arch_seq_points);
+		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_hash, method_in_assembly, assembly);
+		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_got_slot_hash, method_in_assembly, assembly);
+		g_hash_table_foreach_remove(domain_jit_info (domain)->method_code_hash, method_in_assembly, assembly);
+		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_trampoline_hash, method_in_assembly, assembly);
+		g_hash_table_foreach_remove(domain_jit_info (domain)->jit_trampoline_hash, method_in_assembly, assembly);
+		g_hash_table_foreach_remove(domain_jit_info (domain)->delegate_trampoline_hash, klass_is_in_assembly, assembly);
+		mono_internal_hash_table_foreach_remove(&(domain->jit_code_hash), method_in_assembly, assembly);
+		
+		// Could be improved
+		mono_reflection_cleanup_domain(domain);
+
+		mono_domain_unlock (domain);
+	}
+
+    if (mono_assembly_close_except_image_pools (assembly))
 		mono_assembly_close_finish (assembly);
 }
 

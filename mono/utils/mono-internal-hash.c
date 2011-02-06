@@ -124,3 +124,24 @@ mono_internal_hash_table_remove (MonoInternalHashTable *table, gpointer key)
 
 	g_assert (0);
 }
+
+void
+mono_internal_hash_table_foreach_remove (MonoInternalHashTable *table, MonoInternalHashRemoveFunc remove_func, gpointer user_data)
+{
+	gpointer* value;
+	int i;
+
+	for (i = 0; i < table->size; ++i) {
+		for (value = &table->table [i];
+			*value != NULL;
+			value = table->next_value (*value)) {
+			while (*value != NULL && remove_func(table->key_extract (*value), *value, user_data))
+			{
+				*value = *(table->next_value (*value));
+				--table->num_entries;
+			}
+			if (*value == NULL)
+				break;
+		}
+	}
+}

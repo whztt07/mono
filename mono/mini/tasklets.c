@@ -51,8 +51,8 @@ continuation_mark_frame (MonoContinuation *cont)
 	MonoJitInfo *ji, rji;
 	int endloop = FALSE;
 
-	if (cont->domain)
-		return mono_get_exception_argument ("cont", "Already marked");
+	//if (cont->domain)
+	//	return mono_get_exception_argument ("cont", "Already marked");
 
 	jit_tls = TlsGetValue (mono_jit_tls_id);
 	lmf = mono_get_lmf();
@@ -84,6 +84,9 @@ continuation_store (MonoContinuation *cont, int state, MonoException **e)
 {
 	MonoLMF *lmf = mono_get_lmf ();
 	gsize num_bytes;
+#ifdef _MSC_VER
+    unsigned int stackptr, retaddr;
+#endif
 
 	if (!cont->domain) {
 		*e =  mono_get_exception_argument ("cont", "Continuation not initialized");
@@ -95,8 +98,17 @@ continuation_store (MonoContinuation *cont, int state, MonoException **e)
 	}
 
 	cont->lmf = lmf;
-	cont->return_ip = __builtin_return_address (0);
-	cont->return_sp = __builtin_frame_address (0);
+#ifdef _MSC_VER
+    mono_arch_flush_register_windows ();
+    __asm mov stackptr, ebp;
+    __asm mov eax, DWORD PTR [ebp + 4];
+    __asm mov retaddr, eax;
+    cont->return_ip = retaddr;
+    cont->return_sp = stackptr;
+#else
+    cont->return_ip = __builtin_return_address (0);
+    cont->return_sp = __builtin_frame_address (0);
+#endif
 
 	num_bytes = (char*)cont->top_sp - (char*)cont->return_sp;
 

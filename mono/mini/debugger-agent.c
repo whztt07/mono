@@ -2416,7 +2416,7 @@ wait_for_suspend (void)
 	nthreads = mono_g_hash_table_size (thread_to_tls);
 	mono_loader_unlock ();
 
-	while (TRUE) {
+	/*while (TRUE) {
 		nwait = count_threads_to_wait_for ();
 		if (nwait) {
 			DEBUG(1, fprintf (log_file, "Waiting for %d(%d) threads to suspend...\n", nwait, nthreads));
@@ -2426,7 +2426,7 @@ wait_for_suspend (void)
 		} else {
 			break;
 		}
-	}
+	}*/
 
 	if (waited)
 		DEBUG(1, fprintf (log_file, "%d threads suspended.\n", nthreads));
@@ -2440,7 +2440,8 @@ wait_for_suspend (void)
 static gboolean
 is_suspended (void)
 {
-	return count_threads_to_wait_for () == 0;
+	//return count_threads_to_wait_for () == 0;
+	return TRUE;
 }
 
 /*

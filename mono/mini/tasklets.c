@@ -51,6 +51,9 @@ continuation_mark_frame (MonoContinuation *cont)
 	MonoJitInfo *ji, rji;
 	int endloop = FALSE;
 
+	memset(&ctx, 0, sizeof(MonoContext));
+	memset(&new_ctx, 0, sizeof(MonoContext));
+
 	//if (cont->domain)
 	//	return mono_get_exception_argument ("cont", "Already marked");
 

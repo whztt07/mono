@@ -3180,6 +3180,27 @@ gboolean method_in_assembly(gpointer key, gpointer value, gpointer user_data)
 	return (method->klass->image == assembly->image);
 }
 
+gboolean sig_in_assembly(gpointer key, gpointer value, gpointer user_data)
+{
+	MonoMethodSignature *sig = value;
+	MonoAssembly *assembly = user_data;
+	int i;
+
+	for (i = 0; i < sig->param_count; ++i)
+	{
+		MonoClass* klass = mono_class_from_mono_type(sig->params[i]);
+		if (klass->image == assembly->image) {
+			return TRUE;
+		}
+		if (sig->params[i]->type == MONO_TYPE_SZARRAY) {
+			int a = 1231232;
+		}
+	}
+	return FALSE;
+}
+
+void clear_anon_gparam_cache();
+
 /**
  * mono_assembly_close:
  * @assembly: the assembly to release.
@@ -3207,14 +3228,14 @@ mono_assembly_close (MonoAssembly *assembly)
 
 		mono_domain_lock (domain);
 
-		mono_g_hash_table_foreach_remove(domain->type_hash, type_is_in_assembly, assembly);
+		clear_anon_gparam_cache();
 
-		deregister_reflection_info_roots(domain, assembly);
-		g_hash_table_foreach (assembly->image->method_cache, clear_domain_method, domain);
-		
-		// Probably not necessary
 		/*for (tmp = domain->domain_assemblies; tmp; tmp = tmp->next) {
 			MonoAssembly* ass = tmp->data;
+			g_hash_table_destroy (ass->image->memberref_signatures);
+			ass->image->memberref_signatures = g_hash_table_new (NULL, NULL);
+			//g_hash_table_foreach_remove(ass->image->memberref_signatures, sig_in_assembly, assembly);
+			// Probably not necessary
 			if (ass->image->rgctx_template_hash)
 			{
 				g_hash_table_foreach_remove(ass->image->rgctx_template_hash, template_rgctx_in_assembly, 0);
@@ -3223,6 +3244,11 @@ mono_assembly_close (MonoAssembly *assembly)
 			}
 		}*/
 
+		mono_g_hash_table_foreach_remove(domain->type_hash, type_is_in_assembly, assembly);
+
+		deregister_reflection_info_roots(domain, assembly);
+		g_hash_table_foreach (assembly->image->method_cache, clear_domain_method, domain);
+		
 		domain->domain_assemblies = g_slist_remove(domain->domain_assemblies, assembly);
 		g_hash_table_foreach_remove(domain->method_rgctx_hash, method_rgctx_is_in_assembly, assembly);
 		

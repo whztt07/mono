@@ -5631,6 +5631,20 @@ static MonoClass *mvar_cache_fast [FAST_CACHE_SIZE];
 static GHashTable *var_cache_slow;
 static GHashTable *mvar_cache_slow;
 
+void clear_anon_gparam_cache()
+{
+	memset(var_cache_fast, 0, sizeof(var_cache_fast));
+	memset(mvar_cache_fast, 0, sizeof(var_cache_fast));
+	if (var_cache_slow) {
+		g_hash_table_destroy(var_cache_slow);
+		var_cache_slow = NULL;
+	}
+	if (mvar_cache_slow) {
+		g_hash_table_destroy(mvar_cache_slow);
+		mvar_cache_slow = NULL;
+	}
+}
+
 static MonoClass *
 get_anon_gparam_class (MonoGenericParam *param, gboolean is_mvar)
 {

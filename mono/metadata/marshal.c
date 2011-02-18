@@ -8287,6 +8287,7 @@ mono_marshal_get_native_wrapper (MonoMethod *method, gboolean check_exceptions, 
 	    (method->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL))
 		pinvoke = TRUE;
 
+	mono_marshal_lock ();
 	if (!piinfo->addr) {
 		if (pinvoke)
 			if (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE)
@@ -8296,6 +8297,7 @@ mono_marshal_get_native_wrapper (MonoMethod *method, gboolean check_exceptions, 
 		else
 			piinfo->addr = mono_lookup_internal_call (method);
 	}
+	mono_marshal_unlock ();
 
 	/* hack - redirect certain string constructors to CreateString */
 	if (piinfo->addr == ves_icall_System_String_ctor_RedirectToCreateString) {

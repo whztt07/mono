@@ -3268,12 +3268,18 @@ mono_assembly_close (MonoAssembly *assembly)
 		//g_hash_table_destroy (info->runtime_invoke_hash);
 		//g_hash_table_destroy (info->seq_points);
 		//g_hash_table_destroy (info->arch_seq_points);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_got_slot_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->method_code_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_trampoline_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jit_trampoline_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->delegate_trampoline_hash, klass_is_in_assembly, assembly);
+		if (domain_jit_info (domain)->jump_target_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->jump_target_got_slot_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_got_slot_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->method_code_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->method_code_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->jump_trampoline_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jump_trampoline_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->jit_trampoline_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jit_trampoline_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->delegate_trampoline_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->delegate_trampoline_hash, klass_is_in_assembly, assembly);
 		mono_internal_hash_table_foreach_remove(&(domain->jit_code_hash), method_in_assembly, assembly);
 		
 		// Could be improved

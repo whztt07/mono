@@ -3220,7 +3220,8 @@ mono_assembly_close (MonoAssembly *assembly)
 		int i;
 
 		mono_domain_lock (domain);
-		mono_g_hash_table_foreach(domain->type_hash, type_unset_static_fields_assembly, assembly);
+		if (domain->type_hash != NULL)
+			mono_g_hash_table_foreach(domain->type_hash, type_unset_static_fields_assembly, assembly);
 		mono_domain_unlock (domain);
 
 		for (i = 0; i < 2; ++i)
@@ -3250,13 +3251,16 @@ mono_assembly_close (MonoAssembly *assembly)
 		mono_g_hash_table_foreach_remove(domain->type_hash, type_is_in_assembly, assembly);
 
 		deregister_reflection_info_roots(domain, assembly);
-		g_hash_table_foreach (assembly->image->method_cache, clear_domain_method, domain);
+		if (assembly->image->method_cache != NULL)
+			g_hash_table_foreach (assembly->image->method_cache, clear_domain_method, domain);
 		
 		domain->domain_assemblies = g_slist_remove(domain->domain_assemblies, assembly);
-		g_hash_table_foreach_remove(domain->method_rgctx_hash, method_rgctx_is_in_assembly, assembly);
+		if (domain->method_rgctx_hash != NULL)
+			g_hash_table_foreach_remove(domain->method_rgctx_hash, method_rgctx_is_in_assembly, assembly);
 		
 		// Not tested
-		g_hash_table_foreach_remove(domain->generic_virtual_cases, gvc_is_in_assembly, assembly);
+		if (domain->generic_virtual_cases != NULL)
+			g_hash_table_foreach_remove(domain->generic_virtual_cases, gvc_is_in_assembly, assembly);
 	
 		//g_hash_table_destroy (info->class_init_trampoline_hash);
 		/*if (domain_jit_info (domain)->static_rgctx_trampoline_hash)
@@ -3268,12 +3272,18 @@ mono_assembly_close (MonoAssembly *assembly)
 		//g_hash_table_destroy (info->runtime_invoke_hash);
 		//g_hash_table_destroy (info->seq_points);
 		//g_hash_table_destroy (info->arch_seq_points);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_got_slot_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->method_code_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jump_trampoline_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->jit_trampoline_hash, method_in_assembly, assembly);
-		g_hash_table_foreach_remove(domain_jit_info (domain)->delegate_trampoline_hash, klass_is_in_assembly, assembly);
+		if (domain_jit_info (domain)->jump_target_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->jump_target_got_slot_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jump_target_got_slot_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->method_code_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->method_code_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->jump_trampoline_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jump_trampoline_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->jit_trampoline_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->jit_trampoline_hash, method_in_assembly, assembly);
+		if (domain_jit_info (domain)->delegate_trampoline_hash != NULL)
+			g_hash_table_foreach_remove(domain_jit_info (domain)->delegate_trampoline_hash, klass_is_in_assembly, assembly);
 		mono_internal_hash_table_foreach_remove(&(domain->jit_code_hash), method_in_assembly, assembly);
 		
 		// Could be improved

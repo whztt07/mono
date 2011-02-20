@@ -2965,7 +2965,10 @@ clear_domain_method (gpointer key, gpointer value, gpointer data)
 	MonoMethod* method = value;
 
 	mono_domain_lock (domain);
-	g_hash_table_remove (domain_jit_info (domain)->dynamic_code_hash, method);
+	if (domain_jit_info (domain)->dynamic_code_hash != NULL)
+	{
+		g_hash_table_remove (domain_jit_info (domain)->dynamic_code_hash, method);
+	}
 	if (mono_internal_hash_table_lookup(&domain->jit_code_hash, method) != NULL)
 	{
 		mono_internal_hash_table_remove (&domain->jit_code_hash, method);

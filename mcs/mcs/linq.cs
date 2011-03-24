@@ -16,7 +16,7 @@ namespace Mono.CSharp.Linq
 	public class QueryExpression : AQueryClause
 	{
 		public QueryExpression (AQueryClause start)
-			: base (null, null, Location.Null)
+			: base (null, null, start.Location)
 		{
 			this.next = start;
 		}
@@ -116,7 +116,7 @@ namespace Mono.CSharp.Linq
 						TypeInferenceContext tic = new TypeInferenceContext (source_type.TypeArguments);
 						tic.OutputTypeInference (rc, a.Expr, source_type);
 						if (tic.FixAllTypes (rc)) {
-							source_type = source_type.GetDefinition ().MakeGenericType (tic.InferredTypeArguments);
+							source_type = source_type.GetDefinition ().MakeGenericType (rc, tic.InferredTypeArguments);
 						}
 					}
 
@@ -723,7 +723,7 @@ namespace Mono.CSharp.Linq
 				Identifier = identifier.Name;
 			}
 
-			public new static void Reset ()
+			public static void Reset ()
 			{
 				Counter = 0;
 			}

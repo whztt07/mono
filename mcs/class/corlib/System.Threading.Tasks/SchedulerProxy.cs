@@ -31,8 +31,7 @@ using System.Reflection;
 
 namespace System.Threading.Tasks
 {
-	
-	internal class SchedulerProxy : IScheduler
+	internal class SchedulerProxy
 	{
 		TaskScheduler scheduler;
 
@@ -47,14 +46,12 @@ namespace System.Threading.Tasks
 
 		void FindMonoSpecificImpl ()
 		{
-			Console.WriteLine (scheduler.GetType ());
-
 			// participateUntil1
-			FetchMethod<Action<Task>> ("ParticipateUntil",
+			FetchMethod<Action<Task>> ("MonoParticipateUntil",
 			                           new[] { typeof(Task) },
 			                           ref participateUntil1);
 			// participateUntil2
-			FetchMethod<Func<Task, ManualResetEventSlim, int, bool>> ("ParticipateUntil",
+			FetchMethod<Func<Task, ManualResetEventSlim, int, bool>> ("MonoParticipateUntil",
 			                                                          new[] { typeof(Task), typeof(ManualResetEventSlim), typeof(int) },
 			                                                          ref participateUntil2);
 		}
@@ -71,19 +68,19 @@ namespace System.Threading.Tasks
 			field = Delegate.CreateDelegate (typeof(TDelegate), scheduler, method) as TDelegate;
 			Console.WriteLine ("Created delegate for " + name);
 		}
-		
-		#region IScheduler implementation
-		public void AddWork (Task t)
-		{
-			scheduler.QueueTask (t);
-		}
-		
+
 		public void ParticipateUntil (Task task)
 		{
 			if (participateUntil1 != null) {
 				participateUntil1 (task);
 				return;
 			}
+
+			if (task.Status == TaskStatus.WaitingToRun)
+				task.Execute (null);
+
+			if (task.IsCompleted)
+				return;
 
 			ManualResetEventSlim evt = new ManualResetEventSlim (false);
 			task.ContinueWith (_ => evt.Set (), TaskContinuationOptions.ExecuteSynchronously);
@@ -93,6 +90,9 @@ namespace System.Threading.Tasks
 		
 		public bool ParticipateUntil (Task task, ManualResetEventSlim evt, int millisecondsTimeout)
 		{
+			if (task.IsCompleted)
+				return false;
+
 			if (participateUntil2 != null)
 				return participateUntil2 (task, evt, millisecondsTimeout);
 
@@ -113,15 +113,6 @@ namespace System.Threading.Tasks
 		{
 			
 		}
-		#endregion
-
-		#region IDisposable implementation
-		public void Dispose ()
-		{
-			scheduler = null;
-		}
-		#endregion
-
 	}
 }
 #endif

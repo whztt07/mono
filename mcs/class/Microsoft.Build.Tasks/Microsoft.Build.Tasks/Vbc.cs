@@ -183,7 +183,7 @@ namespace Microsoft.Build.Tasks {
 			string col = match.Result ("${column}");
 			int columnNumber = 0;
 			if (!string.IsNullOrEmpty (col))
-				columnNumber = col == "255+" ? -1 : Int32.Parse (col);
+				columnNumber = col.IndexOf ("+") >= 0 ? -1 : Int32.Parse (col);
 
 			string category = match.Result ("${level}");
 			string code = match.Result ("${number}");
@@ -304,7 +304,13 @@ namespace Microsoft.Build.Tasks {
 
 		[MonoTODO]
 		protected override string ToolName {
-			get { return MSBuildUtils.RunningOnWindows ? "vbnc.bat" : "vbnc"; }
+			get {
+#if NET_4_0
+				return MSBuildUtils.RunningOnWindows ? "vbnc.bat" : "vbnc";
+#else
+				return MSBuildUtils.RunningOnWindows ? "vbnc2.bat" : "vbnc2";
+#endif
+			}
 		}
 
 		[MonoTODO]

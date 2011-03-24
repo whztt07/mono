@@ -51,13 +51,13 @@ namespace System.Threading.Tasks
 		int                 taskId;
 		TaskCreationOptions taskCreationOptions;
 		
-		IScheduler          scheduler;
-		TaskScheduler       taskScheduler;
+		TaskScheduler       scheduler;
 
 		ManualResetEventSlim schedWait = new ManualResetEventSlim (false);
 		
 		volatile AggregateException  exception;
 		volatile bool                exceptionObserved;
+		ConcurrentQueue<AggregateException> childExceptions;
 
 		TaskStatus          status;
 		
@@ -149,31 +149,15 @@ namespace System.Threading.Tasks
 		
 		public void Start (TaskScheduler scheduler)
 		{
-			Start (ProxifyScheduler (scheduler));
-		}
-		
-		void Start (IScheduler scheduler)
-		{
 			SetupScheduler (scheduler);
 			Schedule ();
 		}
 
-		internal void SetupScheduler (TaskScheduler tscheduler)
-		{
-			SetupScheduler (ProxifyScheduler (tscheduler));
-		}
-
-		internal void SetupScheduler (IScheduler scheduler)
+		internal void SetupScheduler (TaskScheduler scheduler)
 		{
 			this.scheduler = scheduler;
 			status = TaskStatus.WaitingForActivation;
 			schedWait.Set ();
-		}
-		
-		IScheduler ProxifyScheduler (TaskScheduler tscheduler)
-		{
-			IScheduler sched = tscheduler as IScheduler;
-			return sched != null ? sched : new SchedulerProxy (tscheduler);
 		}
 		
 		public void RunSynchronously ()
@@ -274,8 +258,7 @@ namespace System.Threading.Tasks
 		                                TaskScheduler scheduler, Func<bool> predicate)
 		{
 			// Already set the scheduler so that user can call Wait and that sort of stuff
-			continuation.taskScheduler = scheduler;
-			continuation.scheduler = ProxifyScheduler (scheduler);
+			continuation.scheduler = scheduler;
 			continuation.schedWait.Set ();
 			continuation.status = TaskStatus.WaitingForActivation;
 			
@@ -319,6 +302,12 @@ namespace System.Threading.Tasks
 			int kindCode = (int)kind;
 			
 			if (kindCode >= ((int)TaskContinuationOptions.NotOnRanToCompletion)) {
+				// Remove other options
+				kind &= ~(TaskContinuationOptions.PreferFairness
+				          | TaskContinuationOptions.LongRunning
+				          | TaskContinuationOptions.AttachedToParent
+				          | TaskContinuationOptions.ExecuteSynchronously);
+
 				if (status == TaskStatus.Canceled) {
 					if (kind == TaskContinuationOptions.NotOnCanceled)
 						return false;
@@ -374,8 +363,9 @@ namespace System.Threading.Tasks
 			status = TaskStatus.WaitingToRun;
 			
 			// If worker is null it means it is a local one, revert to the old behavior
-			if (childWorkAdder == null || CheckTaskOptions (taskCreationOptions, TaskCreationOptions.PreferFairness)) {
-				scheduler.AddWork (this);
+			// If TaskScheduler.Current is not being used, the scheduler was explicitly provided, so we must use that
+			if (scheduler != TaskScheduler.Current || childWorkAdder == null || CheckTaskOptions (taskCreationOptions, TaskCreationOptions.PreferFairness)) {
+				scheduler.QueueTask (this);
 			} else {
 				/* Like the semantic of the ABP paper describe it, we add ourselves to the bottom 
 				 * of our Parent Task's ThreadWorker deque. It's ok to do that since we are in
@@ -395,7 +385,7 @@ namespace System.Threading.Tasks
 				return;
 
 			current = this;
-			TaskScheduler.Current = taskScheduler;
+			TaskScheduler.Current = scheduler;
 			
 			if (!token.IsCancellationRequested) {
 				
@@ -429,11 +419,17 @@ namespace System.Threading.Tasks
 			childTasks.AddCount ();
 		}
 
-		internal void ChildCompleted ()
+		internal void ChildCompleted (AggregateException childEx)
 		{
+			if (childEx != null) {
+				if (childExceptions == null)
+					Interlocked.CompareExchange (ref childExceptions, new ConcurrentQueue<AggregateException> (), null);
+				childExceptions.Enqueue (childEx);
+			}
+
 			if (childTasks.Signal () && status == TaskStatus.WaitingForChildrenToComplete) {
 				status = TaskStatus.RanToCompletion;
-				
+				ProcessChildExceptions ();
 				ProcessCompleteDelegates ();
 			}
 		}
@@ -472,8 +468,8 @@ namespace System.Threading.Tasks
 			TaskScheduler.Current = null;
 			
 			// Tell parent that we are finished
-			if (CheckTaskOptions (taskCreationOptions, TaskCreationOptions.AttachedToParent) && parent != null){
-				parent.ChildCompleted ();
+			if (CheckTaskOptions (taskCreationOptions, TaskCreationOptions.AttachedToParent) && parent != null) {
+				parent.ChildCompleted (this.Exception);
 			}
 		}
 
@@ -485,6 +481,19 @@ namespace System.Threading.Tasks
 			EventHandler handler;
 			while (completed.TryDequeue (out handler))
 				handler (this, EventArgs.Empty);
+		}
+
+		void ProcessChildExceptions ()
+		{
+			if (childExceptions == null)
+				return;
+
+			if (exception == null)
+				exception = new AggregateException ();
+
+			AggregateException childEx;
+			while (childExceptions.TryDequeue (out childEx))
+				exception.AddChildException (childEx);
 		}
 		#endregion
 		
@@ -503,8 +512,9 @@ namespace System.Threading.Tasks
 		internal void HandleGenericException (AggregateException e)
 		{
 			exception = e;
+			Thread.MemoryBarrier ();
 			status = TaskStatus.Faulted;
-			if (taskScheduler != null && taskScheduler.FireUnobservedEvent (exception).Observed)
+			if (scheduler != null && scheduler.FireUnobservedEvent (exception).Observed)
 				exceptionObserved = true;
 		}
 		
@@ -573,34 +583,39 @@ namespace System.Threading.Tasks
 		{
 			if (tasks == null)
 				throw new ArgumentNullException ("tasks");
-			if (tasks.Length == 0)
-				throw new ArgumentException ("tasks is empty", "tasks");
 			
-			foreach (var t in tasks)
+			foreach (var t in tasks) {
+				if (t == null)
+					throw new ArgumentNullException ("tasks", "the tasks argument contains a null element");
 				t.Wait ();
+			}
 		}
 
 		public static void WaitAll (Task[] tasks, CancellationToken cancellationToken)
 		{
 			if (tasks == null)
 				throw new ArgumentNullException ("tasks");
-			if (tasks.Length == 0)
-				throw new ArgumentException ("tasks is empty", "tasks");
 			
-			foreach (var t in tasks)
+			foreach (var t in tasks) {
+				if (t == null)
+					throw new ArgumentNullException ("tasks", "the tasks argument contains a null element");
+
 				t.Wait (cancellationToken);
+			}
 		}
 		
 		public static bool WaitAll (Task[] tasks, TimeSpan timeout)
 		{
 			if (tasks == null)
 				throw new ArgumentNullException ("tasks");
-			if (tasks.Length == 0)
-				throw new ArgumentException ("tasks is empty", "tasks");
 			
 			bool result = true;
-			foreach (var t in tasks)
+			foreach (var t in tasks) {
+				if (t == null)
+					throw new ArgumentNullException ("tasks", "the tasks argument contains a null element");
+
 				result &= t.Wait (timeout);
+			}
 			return result;
 		}
 		
@@ -608,12 +623,14 @@ namespace System.Threading.Tasks
 		{
 			if (tasks == null)
 				throw new ArgumentNullException ("tasks");
-			if (tasks.Length == 0)
-				throw new ArgumentException ("tasks is empty", "tasks");
 			
 			bool result = true;
-			foreach (var t in tasks)
+			foreach (var t in tasks) {
+				if (t == null)
+					throw new ArgumentNullException ("tasks", "the tasks argument contains a null element");
+
 				result &= t.Wait (millisecondsTimeout);
+			}
 			return result;
 		}
 		
@@ -621,12 +638,14 @@ namespace System.Threading.Tasks
 		{
 			if (tasks == null)
 				throw new ArgumentNullException ("tasks");
-			if (tasks.Length == 0)
-				throw new ArgumentException ("tasks is empty", "tasks");
 			
 			bool result = true;
-			foreach (var t in tasks)
+			foreach (var t in tasks) {
+				if (t == null)
+					throw new ArgumentNullException ("tasks", "the tasks argument contains a null element");
+
 				result &= t.Wait (millisecondsTimeout, cancellationToken);
+			}
 			return result;
 		}
 		
@@ -670,7 +689,7 @@ namespace System.Threading.Tasks
 			int numFinished = 0;
 			int indexFirstFinished = -1;
 			int index = 0;
-			IScheduler sched = null;
+			TaskScheduler sched = null;
 			Task task = null;
 			Watch watch = Watch.StartNew ();
 			ManualResetEventSlim predicateEvt = new ManualResetEventSlim (false);

@@ -385,7 +385,7 @@ namespace Mono.CSharp {
 				}
 			} else {
 				if ((ModFlags & (Modifiers.ABSTRACT | Modifiers.EXTERN | Modifiers.PARTIAL)) == 0 && !(Parent is Delegate)) {
-					if (RootContext.Version >= LanguageVersion.V_3) {
+					if (Compiler.Settings.Version >= LanguageVersion.V_3) {
 						Property.PropertyMethod pm = this as Property.PropertyMethod;
 						if (pm is Indexer.GetIndexerMethod || pm is Indexer.SetIndexerMethod)
 							pm = null;
@@ -459,7 +459,7 @@ namespace Mono.CSharp {
 		/// </summary>
 		public virtual void Emit ()
 		{
-			if (!RootContext.VerifyClsCompliance)
+			if (!Compiler.Settings.VerifyClsCompliance)
 				return;
 
 			VerifyClsCompliance ();
@@ -915,6 +915,10 @@ namespace Mono.CSharp {
 			PendingBaseTypeInflate = 1 << 15,
 			InterfacesExpanded = 1 << 16,
 			IsNotRealProperty = 1 << 17,
+			SpecialRuntimeType = 1 << 18,
+			InflatedExpressionType = 1 << 19,
+			InflatedNullableType = 1 << 20,
+			GenericIterateInterface = 1 << 21,
 		}
 
 		protected Modifiers modifiers;
@@ -1090,32 +1094,32 @@ namespace Mono.CSharp {
 		}
 
 		//
-		// Is this member accessible from invocationType
+		// Is this member accessible from invocation context
 		//
-		public bool IsAccessible (TypeSpec invocationType)
+		public bool IsAccessible (IMemberContext ctx)
 		{
 			var ma = Modifiers & Modifiers.AccessibilityMask;
 			if (ma == Modifiers.PUBLIC)
 				return true;
 
 			var parentType = /* this as TypeSpec ?? */ DeclaringType;
+			var ctype = ctx.CurrentType;
 
-			// It's null for module context
-			if (invocationType == null)
-				invocationType = InternalType.FakeInternalType;
-		
-			//
-			// If only accessible to the current class or children
-			//
-			if (ma == Modifiers.PRIVATE)
-				return invocationType.MemberDefinition == parentType.MemberDefinition ||
-					TypeManager.IsNestedChildOf (invocationType, parentType.MemberDefinition);
+			if (ma == Modifiers.PRIVATE) {
+				if (ctype == null)
+					return false;
+				//
+				// It's only accessible to the current class or children
+				//
+				if (parentType.MemberDefinition == ctype.MemberDefinition)
+					return true;
+
+				return TypeManager.IsNestedChildOf (ctype, parentType.MemberDefinition);
+			}
 
 			if ((ma & Modifiers.INTERNAL) != 0) {
 				bool b;
-				var assembly = invocationType == InternalType.FakeInternalType ?
-					RootContext.ToplevelTypes.DeclaringAssembly :
-					invocationType.MemberDefinition.DeclaringAssembly;
+				var assembly = ctype == null ? ctx.Module.DeclaringAssembly : ctype.MemberDefinition.DeclaringAssembly;
 
 				if (parentType == null) {
 					b = ((ITypeDefinition) MemberDefinition).IsInternalAsPublic (assembly);
@@ -1127,11 +1131,18 @@ namespace Mono.CSharp {
 					return b;
 			}
 
-			// PROTECTED
-			if (!TypeManager.IsNestedFamilyAccessible (invocationType, parentType))
-				return false;
+			//
+			// Checks whether `ctype' is a subclass or nested child of `parentType'.
+			//
+			while (ctype != null) {
+				if (TypeManager.IsFamilyAccessible (ctype, parentType))
+					return true;
 
-			return true;
+				// Handle nested types.
+				ctype = ctype.DeclaringType;	// TODO: Untested ???
+			}
+
+			return false;
 		}
 
 		//
@@ -1161,7 +1172,7 @@ namespace Mono.CSharp {
 			return (state & StateFlags.CLSCompliant) != 0;
 		}
 
-		public bool IsConditionallyExcluded (Location loc)
+		public bool IsConditionallyExcluded (CompilerContext ctx, Location loc)
 		{
 			if ((Kind & (MemberKind.Class | MemberKind.Method)) == 0)
 				return false;
@@ -1171,7 +1182,7 @@ namespace Mono.CSharp {
 				return false;
 
 			foreach (var condition in conditions) {
-				if (loc.CompilationUnit.IsConditionalDefined (condition))
+				if (loc.CompilationUnit.IsConditionalDefined (ctx, condition))
 					return false;
 			}
 
@@ -1253,7 +1264,7 @@ namespace Mono.CSharp {
 			}
 		}
 
-		static string[] attribute_targets = new string [] { "type" };
+		static readonly string[] attribute_targets = new string [] { "type" };
 
 		public DeclSpace (NamespaceEntry ns, DeclSpace parent, MemberName name,
 				  Attributes attrs)

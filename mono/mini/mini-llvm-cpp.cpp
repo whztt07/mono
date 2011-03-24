@@ -109,7 +109,7 @@ public:
 						   unsigned char *TableEnd, 
 						   unsigned char* FrameRegister);
 
-#if LLVM_MAJOR_VERSION == 2 && LLVM_MINOR_VERSION >= 7
+#if LLVM_CHECK_VERSION(2, 7)
 	virtual void deallocateFunctionBody(void*) {
 	}
 
@@ -383,7 +383,6 @@ force_pass_linking (void)
       (void) llvm::createLCSSAPass();
       (void) llvm::createLICMPass();
       (void) llvm::createLazyValueInfoPass();
-      (void) llvm::createLiveValuesPass();
       (void) llvm::createLoopDependenceAnalysisPass();
 	  /*
       (void) llvm::createLoopExtractorPass();
@@ -418,7 +417,6 @@ force_pass_linking (void)
       (void) llvm::createSCCPPass();
       (void) llvm::createScalarReplAggregatesPass();
       (void) llvm::createSimplifyLibCallsPass();
-      (void) llvm::createSimplifyHalfPowrLibCallsPass();
 	  /*
       (void) llvm::createSingleLoopExtractorPass();
       (void) llvm::createStripSymbolsPass();
@@ -517,7 +515,7 @@ mono_llvm_create_ee (LLVMModuleProviderRef MP, AllocCodeMemoryCb *alloc_cb, Func
 	  }
   } else {
 	  /* Use the same passes used by 'opt' by default, without the ipo passes */
-	  const char *opts = "-simplifycfg -domtree -domfrontier -scalarrepl -instcombine -simplifycfg -basiccg -domtree -domfrontier -scalarrepl -simplify-libcalls -instcombine -simplifycfg -instcombine -simplifycfg -reassociate -domtree -loops -loopsimplify -domfrontier -loopsimplify -lcssa -loop-rotate -licm -lcssa -loop-unswitch -instcombine -scalar-evolution -loopsimplify -lcssa -iv-users -indvars -loop-deletion -loopsimplify -lcssa -loop-unroll -instcombine -memdep -gvn -memdep -memcpyopt -sccp -instcombine -domtree -memdep -dse -adce -gvn -simplifycfg -preverify -domtree -verify";
+	  const char *opts = "-simplifycfg -domtree -domfrontier -scalarrepl -instcombine -simplifycfg -basiccg -domtree -domfrontier -scalarrepl -simplify-libcalls -instcombine -simplifycfg -instcombine -simplifycfg -reassociate -domtree -loops -loop-simplify -domfrontier -loop-simplify -lcssa -loop-rotate -licm -lcssa -loop-unswitch -instcombine -scalar-evolution -loop-simplify -lcssa -iv-users -indvars -loop-deletion -loop-simplify -lcssa -loop-unroll -instcombine -memdep -gvn -memdep -memcpyopt -sccp -instcombine -domtree -memdep -dse -adce -gvn -simplifycfg -preverify -domtree -verify";
 	  char **args;
 	  int i;
 

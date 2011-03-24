@@ -606,17 +606,8 @@ static gboolean
 generic_inst_is_sharable (MonoGenericInst *inst, gboolean allow_type_vars,
 						  gboolean allow_partial)
 {
-	gboolean has_refs;
 	int i;
 
-	has_refs = FALSE;
-	for (i = 0; i < inst->type_argc; ++i) {
-		MonoType *type = inst->type_argv [i];
-
-		if (MONO_TYPE_IS_REFERENCE (type) || (allow_type_vars && (type->type == MONO_TYPE_VAR || type->type == MONO_TYPE_MVAR)))
-			has_refs = TRUE;
-	}
- 
 	for (i = 0; i < inst->type_argc; ++i) {
 		MonoType *type = inst->type_argv [i];
 
@@ -1886,4 +1877,15 @@ mono_generic_sharing_cleanup (void)
 
 	if (generic_subclass_hash)
 		g_hash_table_destroy (generic_subclass_hash);
+}
+
+gboolean
+mini_type_is_reference (MonoCompile *cfg, MonoType *type)
+{
+	if (mono_type_is_reference (type))
+		return TRUE;
+	if (!cfg->generic_sharing_context)
+		return FALSE;
+	/*FIXME the probably needs better handle under partial sharing*/
+	return type->type == MONO_TYPE_VAR || type->type == MONO_TYPE_MVAR;
 }

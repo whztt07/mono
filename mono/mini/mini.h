@@ -20,18 +20,10 @@
 #include <mono/metadata/profiler-private.h>
 #include <mono/metadata/debug-helpers.h>
 #include <mono/utils/mono-compiler.h>
+#include <mono/utils/mono-machine.h>
+#include <mono/utils/mono-stack-unwinding.h>
 
 #define MONO_BREAKPOINT_ARRAY_SIZE 64
-
-/* C type matching the size of a machine register. Not always the same as 'int' */
-/* Note that member 'p' of MonoInst must be the same type, as OP_PCONST is defined
- * as one of the OP_ICONST types, so inst_c0 must be the same as inst_p0
- */
-#if SIZEOF_REGISTER == 4
-typedef gint32 mgreg_t;
-#elif SIZEOF_REGISTER == 8
-typedef gint64 mgreg_t;
-#endif
 
 #include "mini-arch.h"
 #include "regalloc.h"
@@ -267,50 +259,21 @@ typedef struct {
 
 #define domain_jit_info(domain) ((MonoJitDomainInfo*)((domain)->runtime_info))
 
+/* Contains a list of ips which needs to be patched when a method is compiled */
+typedef struct {
+	GSList *list;
+} MonoJumpList;
+
 /* Arch-specific */
 typedef struct {
 	int dummy;
 } MonoDynCallInfo;
 
 /*
- * Possible frame types returned by the stack walker.
+ * Information about a stack frame.
+ * FIXME This typedef exists only to avoid tons of code rewriting
  */
-typedef enum {
-	/* Normal managed frames */
-	FRAME_TYPE_MANAGED = 0,
-	/* Pseudo frame marking the start of a method invocation done by the soft debugger */
-	FRAME_TYPE_DEBUGGER_INVOKE = 1,
-	/* Frame for transitioning to native code */
-	FRAME_TYPE_MANAGED_TO_NATIVE = 2,
-	FRAME_TYPE_SENTINEL = 3
-} StackFrameType;
-
-/*
- * Information about a stack frame
- */
-typedef struct {
-	StackFrameType type;
-	/* 
-	 * For FRAME_TYPE_MANAGED, otherwise NULL.
-	 */
-	MonoJitInfo *ji;
-	/*
-	 * Same as ji->method.
-	 */
-	MonoMethod *method;
-	/*
-	 * If ji->method is a gshared method, this is the actual method instance.
-	 */
-	MonoMethod *actual_method;
-	/* The domain containing the code executed by this frame */
-	MonoDomain *domain;
-	gboolean managed;
-	int native_offset;
-	int il_offset;
-	gpointer lmf;
-	guint32 unwind_info_len;
-	guint8 *unwind_info;
-} StackFrameInfo;
+typedef MonoStackFrameInfo StackFrameInfo;
 
 typedef struct {
 	int il_offset, native_offset;
@@ -838,6 +801,11 @@ enum {
 	MONO_INST_NORANGECHECK   = 16,
 	/* On loads, the source address can be null */
 	MONO_INST_FAULT = 32,
+	/* 
+	 * On variables, identifies LMF variables. These variables have a dummy type (int), but
+	 * require stack space for a MonoLMF struct.
+	 */
+	MONO_INST_LMF = 32,
 	/* On loads, the source address points to a constant value */
 	MONO_INST_CONSTANT_LOAD = 64,
 	/* On variables, the variable needs GC tracking */
@@ -1923,8 +1891,7 @@ void*             nacl_global_codeman_get_dest(void *data) MONO_INTERNAL;
 void              mono_global_codeman_commit(void *data, int size, int newsize) MONO_INTERNAL;
 void              nacl_global_codeman_validate(guint8 **buf_base, int buf_size, guint8 **code_end) MONO_INTERNAL;
 const char       *mono_regname_full (int reg, int bank) MONO_INTERNAL;
-gint32*           mono_allocate_stack_slots_full (MonoCompile *cfg, gboolean backward, guint32 *stack_size, guint32 *stack_align) MONO_INTERNAL;
-gint32*           mono_allocate_stack_slots (MonoCompile *cfg, guint32 *stack_size, guint32 *stack_align) MONO_INTERNAL;
+gint32*           mono_allocate_stack_slots (MonoCompile *cfg, gboolean backward, guint32 *stack_size, guint32 *stack_align) MONO_INTERNAL;
 void              mono_local_regalloc (MonoCompile *cfg, MonoBasicBlock *bb) MONO_INTERNAL;
 MonoInst         *mono_branch_optimize_exception_target (MonoCompile *cfg, MonoBasicBlock *bb, const char * exname) MONO_INTERNAL;
 void              mono_remove_critical_edges (MonoCompile *cfg) MONO_INTERNAL;
@@ -1985,7 +1952,7 @@ GList    *mono_arch_get_global_fp_regs          (MonoCompile *cfg) MONO_INTERNAL
 GList    *mono_arch_get_iregs_clobbered_by_call (MonoCallInst *call) MONO_INTERNAL;
 GList    *mono_arch_get_fregs_clobbered_by_call (MonoCallInst *call) MONO_INTERNAL;
 guint32   mono_arch_regalloc_cost               (MonoCompile *cfg, MonoMethodVar *vmv) MONO_INTERNAL;
-void      mono_arch_patch_code                  (MonoMethod *method, MonoDomain *domain, guint8 *code, MonoJumpInfo *ji, gboolean run_cctors) MONO_INTERNAL;
+void      mono_arch_patch_code                  (MonoMethod *method, MonoDomain *domain, guint8 *code, MonoJumpInfo *ji, MonoCodeManager *dyn_code_mp, gboolean run_cctors) MONO_INTERNAL;
 void      mono_arch_flush_icache                (guint8 *code, gint size) MONO_INTERNAL;
 int       mono_arch_max_epilog_size             (MonoCompile *cfg) MONO_INTERNAL;
 guint8   *mono_arch_emit_prolog                 (MonoCompile *cfg) MONO_INTERNAL;
@@ -2092,16 +2059,6 @@ gpointer mono_create_handler_block_trampoline (void) MONO_INTERNAL;
 gboolean mono_install_handler_block_guard (MonoInternalThread *thread, MonoContext *ctx) MONO_INTERNAL;
 
 /* Exception handling */
-
-typedef enum {
-	MONO_UNWIND_NONE = 0x0,
-	MONO_UNWIND_LOOKUP_IL_OFFSET = 0x1,
-	MONO_UNWIND_LOOKUP_ACTUAL_METHOD = 0x2,
-	MONO_UNWIND_DEFAULT = MONO_UNWIND_LOOKUP_ACTUAL_METHOD,
-	MONO_UNWIND_SIGNAL_SAFE = MONO_UNWIND_NONE,
-	MONO_UNWIND_LOOKUP_ALL = MONO_UNWIND_LOOKUP_IL_OFFSET | MONO_UNWIND_LOOKUP_ACTUAL_METHOD,
-} MonoUnwindOptions;
-
 typedef gboolean (*MonoJitStackWalk)            (StackFrameInfo *frame, MonoContext *ctx, gpointer data);
 
 void     mono_exceptions_init                   (void) MONO_INTERNAL;
@@ -2110,9 +2067,13 @@ gboolean mono_handle_exception                  (MonoContext *ctx, gpointer obj,
 void     mono_handle_native_sigsegv             (int signal, void *sigctx) MONO_INTERNAL;
 void     mono_print_thread_dump                 (void *sigctx);
 void     mono_print_thread_dump_from_ctx        (MonoContext *ctx);
-void     mono_jit_walk_stack                    (MonoStackWalk func, gboolean do_il_offset, gpointer user_data) MONO_INTERNAL;
-void     mono_jit_walk_stack_from_ctx           (MonoStackWalk func, MonoContext *ctx, MonoUnwindOptions unwind_options, gpointer user_data) MONO_INTERNAL;
-void     mono_walk_stack                        (MonoJitStackWalk func, MonoDomain *domain, MonoContext *start_ctx, MonoUnwindOptions unwind_options, MonoInternalThread *thread, MonoLMF *lmf, gpointer user_data) MONO_INTERNAL;
+void     mono_walk_stack_with_ctx               (MonoJitStackWalk func, MonoContext *start_ctx, MonoUnwindOptions unwind_options, void *user_data) MONO_INTERNAL;
+void     mono_walk_stack_with_state             (MonoJitStackWalk func, MonoThreadUnwindState *state, MonoUnwindOptions unwind_options, void *user_data) MONO_INTERNAL;
+void     mono_walk_stack                        (MonoJitStackWalk func, MonoUnwindOptions options, void *user_data) MONO_INTERNAL;
+gboolean mono_thread_state_init_from_sigctx     (MonoThreadUnwindState *ctx, void *sigctx) MONO_INTERNAL;
+gboolean mono_thread_state_init_from_current    (MonoThreadUnwindState *ctx) MONO_INTERNAL;
+gboolean mono_thread_state_init_from_monoctx    (MonoThreadUnwindState *ctx, MonoContext *mctx) MONO_INTERNAL;
+
 void     mono_setup_altstack                    (MonoJitTlsData *tls) MONO_INTERNAL;
 void     mono_free_altstack                     (MonoJitTlsData *tls) MONO_INTERNAL;
 gpointer mono_altstack_restore_prot             (mgreg_t *regs, guint8 *code, gpointer *tramp_data, guint8* tramp) MONO_INTERNAL;
@@ -2242,6 +2203,9 @@ mono_method_lookup_or_register_other_info (MonoMethod *method, gboolean in_mrgct
 MonoGenericContext
 mono_method_construct_object_context (MonoMethod *method) MONO_INTERNAL;
 
+MonoMethod*
+mono_method_get_declaring_generic_method (MonoMethod *method) MONO_INTERNAL;
+
 int
 mono_generic_context_check_used (MonoGenericContext *context) MONO_INTERNAL;
 
@@ -2297,6 +2261,8 @@ guint mono_type_to_regmove (MonoCompile *cfg, MonoType *type) MONO_INTERNAL;
 void mono_cfg_add_try_hole (MonoCompile *cfg, MonoExceptionClause *clause, guint8 *start, MonoBasicBlock *bb) MONO_INTERNAL;
 
 void mono_cfg_set_exception (MonoCompile *cfg, int type) MONO_INTERNAL;
+gboolean mini_type_is_reference (MonoCompile *cfg, MonoType *type) MONO_INTERNAL;
+
 
 /* wapihandles.c */
 int mini_wapi_hps (int argc, char **argv) MONO_INTERNAL;
@@ -2410,7 +2376,7 @@ gboolean mono_gdb_render_native_backtraces (void) MONO_INTERNAL;
 #define SIG_HANDLER_SIGNATURE(ftn) ftn (int _dummy, siginfo_t *info, void *context)
 #define SIG_HANDLER_PARAMS _dummy, info, context
 #elif defined(HOST_WIN32)
-#define SIG_HANDLER_SIGNATURE(ftn) ftn (int _dummy, EXCEPTION_RECORD *info, void *context)
+#define SIG_HANDLER_SIGNATURE(ftn) ftn (int _dummy, EXCEPTION_POINTERS *info, void *context)
 #define SIG_HANDLER_PARAMS _dummy, info, context
 #elif defined(__HAIKU__)
 #define SIG_HANDLER_SIGNATURE(ftn) ftn (int _dummy, void *userData, vregs regs)

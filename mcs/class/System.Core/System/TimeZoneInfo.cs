@@ -35,7 +35,6 @@ using System.Runtime.CompilerServices;
 
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Linq;
 using System.Runtime.Serialization;
 using System.Text;
 
@@ -232,7 +231,7 @@ namespace System
 
 			AdjustmentRule rule = GetApplicableRule (dateTime);
 		
-			if (IsDaylightSavingTime (DateTime.SpecifyKind (dateTime, DateTimeKind.Utc)))
+			if (rule != null && IsDaylightSavingTime (DateTime.SpecifyKind (dateTime, DateTimeKind.Utc)))
 				return DateTime.SpecifyKind (dateTime + BaseUtcOffset + rule.DaylightDelta , DateTimeKind.Unspecified);
 			else
 				return DateTime.SpecifyKind (dateTime + BaseUtcOffset, DateTimeKind.Unspecified);
@@ -282,7 +281,10 @@ namespace System
 				return DateTime.SpecifyKind (dateTime - sourceTimeZone.BaseUtcOffset, DateTimeKind.Utc);
 			else {
 				AdjustmentRule rule = sourceTimeZone.GetApplicableRule (dateTime);
-				return DateTime.SpecifyKind (dateTime - sourceTimeZone.BaseUtcOffset - rule.DaylightDelta, DateTimeKind.Utc);
+				if (rule != null)
+					return DateTime.SpecifyKind (dateTime - sourceTimeZone.BaseUtcOffset - rule.DaylightDelta, DateTimeKind.Utc);
+				else
+					return DateTime.SpecifyKind (dateTime - sourceTimeZone.BaseUtcOffset, DateTimeKind.Utc);
 			}
 		}
 
@@ -482,7 +484,10 @@ namespace System
 				throw new ArgumentException ("dateTime is not an ambiguous time");
 
 			AdjustmentRule rule = GetApplicableRule (dateTime);
-			return new TimeSpan[] {baseUtcOffset, baseUtcOffset + rule.DaylightDelta};
+			if (rule != null)
+				return new TimeSpan[] {baseUtcOffset, baseUtcOffset + rule.DaylightDelta};
+			else
+				return new TimeSpan[] {baseUtcOffset, baseUtcOffset};
 		}
 
 		public TimeSpan [] GetAmbiguousTimeOffsets (DateTimeOffset dateTimeOffset)
@@ -559,7 +564,8 @@ namespace System
 		{
 			if (IsDaylightSavingTime (dateTime)) {
 				AdjustmentRule rule = GetApplicableRule (dateTime);
-				return BaseUtcOffset + rule.DaylightDelta;
+				if (rule != null)
+					return BaseUtcOffset + rule.DaylightDelta;
 			}
 			
 			return BaseUtcOffset;
@@ -610,9 +616,11 @@ namespace System
 				dateTime = ConvertTime (dateTime, TimeZoneInfo.Local, this);
 
 			AdjustmentRule rule = GetApplicableRule (dateTime);
-			DateTime tpoint = TransitionPoint (rule.DaylightTransitionEnd, dateTime.Year);
-			if (dateTime > tpoint - rule.DaylightDelta  && dateTime <= tpoint)
-				return true;
+			if (rule != null) {
+				DateTime tpoint = TransitionPoint (rule.DaylightTransitionEnd, dateTime.Year);
+				if (dateTime > tpoint - rule.DaylightDelta  && dateTime <= tpoint)
+					return true;
+			}
 				
 			return false;
 		}
@@ -667,9 +675,11 @@ namespace System
 				return false;
 
 			AdjustmentRule rule = GetApplicableRule (dateTime);
-			DateTime tpoint = TransitionPoint (rule.DaylightTransitionStart, dateTime.Year);
-			if (dateTime >= tpoint && dateTime < tpoint + rule.DaylightDelta)
-				return true;
+			if (rule != null) {
+				DateTime tpoint = TransitionPoint (rule.DaylightTransitionStart, dateTime.Year);
+				if (dateTime >= tpoint && dateTime < tpoint + rule.DaylightDelta)
+					return true;
+			}
 				
 			return false;
 		}
@@ -806,25 +816,6 @@ namespace System
 				return false;
 
 			return true;
-		}
-
-		struct TimeType 
-		{
-			public readonly int Offset;
-			public readonly bool IsDst;
-			public string Name;
-
-			public TimeType (int offset, bool is_dst, string abbrev)
-			{
-				this.Offset = offset;
-				this.IsDst = is_dst;
-				this.Name = abbrev;
-			}
-
-			public override string ToString ()
-			{
-				return "offset: " + Offset + "s, is_dst: " + IsDst + ", zone name: " + Name;
-			}
 		}
 
 		static int SwapInt32 (int i)
@@ -987,6 +978,26 @@ namespace System
 			DateTime date_time = new DateTime (1970, 1, 1);
 			return date_time.AddSeconds (unix_time);
 		}
+	}
+
+	struct TimeType {
+		public readonly int Offset;
+		public readonly bool IsDst;
+		public string Name;
+
+		public TimeType (int offset, bool is_dst, string abbrev)
+		{
+			this.Offset = offset;
+			this.IsDst = is_dst;
+			this.Name = abbrev;
+		}
+
+		public override string ToString ()
+		{
+			return "offset: " + Offset + "s, is_dst: " + IsDst + ", zone name: " + Name;
+		}
+#else
+	}
 #endif
 	}
 }

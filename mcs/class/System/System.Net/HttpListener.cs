@@ -152,28 +152,34 @@ namespace System.Net {
 		{
 			lock (registry) {
 				if (close_existing) {
-					foreach (HttpListenerContext context in registry.Keys) {
-						context.Connection.Close ();
-					}
+					// Need to copy this since closing will call UnregisterContext
+					ICollection keys = registry.Keys;
+					var all = new HttpListenerContext [keys.Count];
+					keys.CopyTo (all, 0);
 					registry.Clear ();
+					for (int i = all.Length - 1; i >= 0; i--)
+						all [i].Connection.Close (true);
 				}
 
-				lock (connections) {
-					foreach (HttpConnection cnc in connections.Keys) {
-						cnc.Close (true);
-					}
+				lock (connections.SyncRoot) {
+					ICollection keys = connections.Keys;
+					var conns = new HttpConnection [keys.Count];
+					keys.CopyTo (conns, 0);
 					connections.Clear ();
+					for (int i = conns.Length - 1; i >= 0; i--)
+						conns [i].Close (true);
 				}
 				lock (ctx_queue) {
-					foreach (HttpListenerContext context in ctx_queue)
-						context.Connection.Close (true);
-
+					var ctxs = (HttpListenerContext []) ctx_queue.ToArray (typeof (HttpListenerContext));
 					ctx_queue.Clear ();
+					for (int i = ctxs.Length - 1; i >= 0; i--)
+						ctxs [i].Connection.Close (true);
 				}
 
 				lock (wait_queue) {
+					Exception exc = new ObjectDisposedException ("listener");
 					foreach (ListenerAsyncResult ares in wait_queue) {
-						ares.Complete ("Listener was closed.");
+						ares.Complete (exc);
 					}
 					wait_queue.Clear ();
 				}
@@ -213,6 +219,9 @@ namespace System.Net {
 			ListenerAsyncResult ares = asyncResult as ListenerAsyncResult;
 			if (ares == null)
 				throw new ArgumentException ("Wrong IAsyncResult.", "asyncResult");
+			if (ares.EndCalled)
+				throw new ArgumentException ("Cannot reuse this IAsyncResult");
+			ares.EndCalled = true;
 
 			if (!ares.IsCompleted)
 				ares.AsyncWaitHandle.WaitOne ();
@@ -242,7 +251,8 @@ namespace System.Net {
 			if (prefixes.Count == 0)
 				throw new InvalidOperationException ("Please, call AddPrefix before using this method.");
 
-			IAsyncResult ares = BeginGetContext (null, null);
+			ListenerAsyncResult ares = (ListenerAsyncResult) BeginGetContext (null, null);
+			ares.InGet = true;
 			return EndGetContext (ares);
 		}
 

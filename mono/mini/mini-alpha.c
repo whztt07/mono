@@ -4035,7 +4035,7 @@ mono_arch_fregname (int reg) {
 
 void
 mono_arch_patch_code (MonoMethod *method, MonoDomain *domain,
-                      guint8 *code, MonoJumpInfo *ji, gboolean run_cctors)
+                      guint8 *code, MonoJumpInfo *ji, MonoCodeManager *dyn_code_mp, gboolean run_cctors)
 {
   MonoJumpInfo *patch_info;
   gboolean compile_aot = !run_cctors;
@@ -5544,7 +5544,7 @@ mono_arch_allocate_vars (MonoCompile *cfg)
      }
    
    /* Allocate locals */
-   offsets = mono_allocate_stack_slots_full (cfg,
+   offsets = mono_allocate_stack_slots (cfg,
 					     /*cfg->arch.omit_fp ? FALSE:*/ TRUE, 
 					     &locals_stack_size,
 					     &locals_stack_align);

@@ -756,6 +756,17 @@ compute_class_bitmap (MonoClass *class, gsize *bitmap, int size, int offset, int
 	return bitmap;
 }
 
+/**
+ * mono_class_compute_bitmap:
+ *
+ * Mono internal function to compute a bitmap of reference fields in a class.
+ */
+gsize*
+mono_class_compute_bitmap (MonoClass *class, gsize *bitmap, int size, int offset, int *max_set, gboolean static_fields)
+{
+	return compute_class_bitmap (class, bitmap, size, offset, max_set, static_fields);
+}
+
 #if 0
 /* 
  * similar to the above, but sets the bits in the bitmap for any non-ref field
@@ -1541,6 +1552,12 @@ mono_method_alloc_generic_virtual_thunk (MonoDomain *domain, int size)
 	p = mono_domain_code_reserve (domain, size);
 	*p = size;
 
+	mono_domain_lock (domain);
+	if (!domain->generic_virtual_thunks)
+		domain->generic_virtual_thunks = g_hash_table_new (NULL, NULL);
+	g_hash_table_insert (domain->generic_virtual_thunks, p, p);
+	mono_domain_unlock (domain);
+
 	return p + 1;
 }
 
@@ -1552,7 +1569,18 @@ invalidate_generic_virtual_thunk (MonoDomain *domain, gpointer code)
 {
 	guint32 *p = code;
 	MonoThunkFreeList *l = (MonoThunkFreeList*)(p - 1);
+	gboolean found = FALSE;
 
+	mono_domain_lock (domain);
+	if (!domain->generic_virtual_thunks)
+		domain->generic_virtual_thunks = g_hash_table_new (NULL, NULL);
+	if (g_hash_table_lookup (domain->generic_virtual_thunks, l))
+		found = TRUE;
+	mono_domain_unlock (domain);
+
+	if (!found)
+		/* Not allocated by mono_method_alloc_generic_virtual_thunk (), i.e. AOT */
+		return;
 	init_thunk_free_lists (domain);
 
 	while (domain->thunk_free_lists [0] && domain->thunk_free_lists [0]->length >= MAX_WAIT_LENGTH) {
@@ -1967,7 +1995,7 @@ mono_class_create_runtime_vtable (MonoDomain *domain, MonoClass *class, gboolean
 					bitmap = default_bitmap;
 				}
 				size = mono_type_size (field->type, &align);
-				offset = mono_alloc_special_static_data (special_static, size, align, bitmap, max_set);
+				offset = mono_alloc_special_static_data (special_static, size, align, (uintptr_t*)bitmap, max_set);
 				if (!domain->special_static_fields)
 					domain->special_static_fields = g_hash_table_new (NULL, NULL);
 				g_hash_table_insert (domain->special_static_fields, field, GUINT_TO_POINTER (offset));
@@ -5587,27 +5615,19 @@ mono_string_to_utf8_mp (MonoMemPool *mp, MonoString *s, MonoError *error)
 	return mono_string_to_utf8_internal (mp, NULL, s, FALSE, error);
 }
 
-static void
-default_ex_handler (MonoException *ex)
+
+static MonoRuntimeExceptionHandlingCallbacks eh_callbacks;
+
+void
+mono_install_eh_callbacks (MonoRuntimeExceptionHandlingCallbacks *cbs)
 {
-	MonoObject *o = (MonoObject*)ex;
-	g_error ("Exception %s.%s raised in C code", o->vtable->klass->name_space, o->vtable->klass->name);
-	exit (1);
+	eh_callbacks = *cbs;
 }
 
-static MonoExceptionFunc ex_handler = default_ex_handler;
-
-/**
- * mono_install_handler:
- * @func: exception handler
- *
- * This is an internal JIT routine used to install the handler for exceptions
- * being throwh.
- */
-void
-mono_install_handler (MonoExceptionFunc func)
+MonoRuntimeExceptionHandlingCallbacks *
+mono_get_eh_callbacks (void)
 {
-	ex_handler = func? func: default_ex_handler;
+	return &eh_callbacks;
 }
 
 /**
@@ -5632,7 +5652,7 @@ mono_raise_exception (MonoException *ex)
 		MONO_OBJECT_SETREF (thread, abort_exc, ex);
 	}
 	
-	ex_handler (ex);
+	eh_callbacks.mono_raise_exception (ex);
 }
 
 /**

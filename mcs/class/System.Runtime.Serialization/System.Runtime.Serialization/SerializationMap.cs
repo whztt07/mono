@@ -386,7 +386,7 @@ namespace System.Runtime.Serialization
 			KnownTypes.Add (memberType);
 			QName qname = KnownTypes.GetQName (memberType);
 			
-			if (KnownTypeCollection.GetPrimitiveTypeFromName (qname.Name) != null)
+			if (KnownTypeCollection.GetPrimitiveTypeFromName (qname) != null)
 				return new DataMemberInfo (mi, dma, ownerNamespace, null);
 			else
 				return new DataMemberInfo (mi, dma, ownerNamespace, qname.Namespace);
@@ -590,8 +590,8 @@ namespace System.Runtime.Serialization
 
 		static Type GetGenericCollectionInterface (Type type)
 		{
-			foreach (var iface in type.GetInterfaces ())
-				if (iface.IsGenericType && iface.GetGenericTypeDefinition () == typeof (ICollection<>))
+			foreach (var iface in type.GetInterfacesOrSelfInterface ())
+				if (iface.IsGenericType && iface.GetGenericTypeDefinition () == typeof (IEnumerable<>))
 					return iface;
 
 			return null;
@@ -731,7 +731,7 @@ namespace System.Runtime.Serialization
 
 		static Type GetGenericDictionaryInterface (Type type)
 		{
-			foreach (var iface in type.GetInterfaces ())
+			foreach (var iface in type.GetInterfacesOrSelfInterface ())
 				if (iface.IsGenericType && iface.GetGenericTypeDefinition () == typeof (IDictionary<,>))
 					return iface;
 
@@ -858,7 +858,7 @@ namespace System.Runtime.Serialization
 			return DeserializeContent (reader, deserializer, id);
 		}
 
-		public override object DeserializeContent(XmlReader reader, XmlFormatterDeserializer deserializer, string id)
+		public override object DeserializeContent (XmlReader reader, XmlFormatterDeserializer deserializer, string id)
 		{
 			object instance = CreateInstance ();
 			HandleId (id, deserializer, instance);
@@ -872,7 +872,9 @@ namespace System.Runtime.Serialization
 				object key = deserializer.Deserialize (key_type, reader);
 				reader.MoveToContent ();
 				object val = deserializer.Deserialize (value_type, reader);
+				reader.MoveToContent ();
 				reader.ReadEndElement (); // of pair
+				reader.MoveToContent ();
 
 				if (instance is IDictionary)
 					((IDictionary)instance).Add (key, val);

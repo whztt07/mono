@@ -1285,5 +1285,73 @@ namespace MonoTests.System.Xaml
 				Assert.AreEqual ("x", res.Bar, "#2");
 			}
 		}
+
+		[Test]
+		public void Write_TypeConverterOnListMember ()
+		{
+			using (var xr = GetReader ("TypeConverterOnListMember.xml")) {
+				var res = (SecondTest.TypeOtherAssembly) XamlServices.Load (xr);
+				Assert.AreEqual (3, res.Values.Count, "#1");
+				Assert.AreEqual (3, res.Values [2], "#2");
+			}
+		}
+
+		[Test]
+		public void Write_EnumContainer ()
+		{
+			using (var xr = GetReader ("EnumContainer.xml")) {
+				var res = (EnumContainer) XamlServices.Load (xr);
+				Assert.AreEqual (EnumValueType.Two, res.EnumProperty, "#1");
+			}
+		}
+
+		[Test]
+		public void Write_CollectionContentProperty ()
+		{
+			using (var xr = GetReader ("CollectionContentProperty.xml")) {
+				var res = (CollectionContentProperty) XamlServices.Load (xr);
+				Assert.AreEqual (4, res.ListOfItems.Count, "#1");
+			}
+		}
+
+		[Test]
+		public void Write_CollectionContentProperty2 ()
+		{
+			using (var xr = GetReader ("CollectionContentProperty2.xml")) {
+				var res = (CollectionContentProperty) XamlServices.Load (xr);
+				Assert.AreEqual (4, res.ListOfItems.Count, "#1");
+			}
+		}
+
+		[Test]
+		public void Write_AmbientPropertyContainer ()
+		{
+			using (var xr = GetReader ("AmbientPropertyContainer.xml")) {
+				var res = (SecondTest.ResourcesDict) XamlServices.Load (xr);
+				Assert.AreEqual (2, res.Count, "#1");
+				Assert.IsTrue (res.ContainsKey ("TestDictItem"), "#2");
+				Assert.IsTrue (res.ContainsKey ("okay"), "#3");
+				var i1 = res ["TestDictItem"] as SecondTest.TestObject;
+				Assert.IsNull (i1.TestProperty, "#4");
+				var i2 = res ["okay"] as SecondTest.TestObject;
+				Assert.AreEqual (i1, i2.TestProperty, "#5");
+			}
+		}
+
+		[Test] // bug #682102
+		[Category ("NotWorking")]
+		public void Write_AmbientPropertyContainer2 ()
+		{
+			using (var xr = GetReader ("AmbientPropertyContainer2.xml")) {
+				var res = (SecondTest.ResourcesDict) XamlServices.Load (xr);
+				Assert.AreEqual (2, res.Count, "#1");
+				Assert.IsTrue (res.ContainsKey ("TestDictItem"), "#2");
+				Assert.IsTrue (res.ContainsKey ("okay"), "#3");
+				var i1 = res ["TestDictItem"] as SecondTest.TestObject;
+				Assert.IsNull (i1.TestProperty, "#4");
+				var i2 = res ["okay"] as SecondTest.TestObject;
+				Assert.AreEqual (i1, i2.TestProperty, "#5");
+			}
+		}
 	}
 }

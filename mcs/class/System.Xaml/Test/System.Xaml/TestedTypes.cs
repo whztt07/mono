@@ -24,6 +24,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -34,6 +35,9 @@ using System.Xaml.Schema;
 using System.Xml;
 using System.Xml.Schema;
 using System.Xml.Serialization;
+
+[assembly: System.Windows.Markup.XmlnsDefinition ("http://www.domain.com/path", "XamlTest")] // bug #680385
+[assembly: System.Windows.Markup.XmlnsDefinition ("http://www.domain.com/path", "SecondTest")] // bug #681045, same xmlns key for different clrns.
 
 namespace MonoTests.System.Xaml
 {
@@ -829,4 +833,188 @@ namespace MonoTests.System.Xaml
 		}
 		public string Bar { get; private set; }
 	}
+
+	public class EnumContainer
+	{
+		public EnumValueType EnumProperty { get; set; }
+	}
+
+	public enum EnumValueType
+	{
+		One,
+		Two,
+		Three,
+		Four
+	}
+
+	[ContentProperty ("ListOfItems")]
+	public class CollectionContentProperty
+	{
+		public IList<SimpleClass> ListOfItems { get; set; }
+
+		public CollectionContentProperty ()
+		{
+			this.ListOfItems = new List<SimpleClass> ();
+		}
+	}
+
+	[ContentProperty ("ListOfItems")]
+	public class CollectionContentPropertyX
+	{
+		public IList ListOfItems { get; set; }
+
+		public CollectionContentPropertyX ()
+		{
+			this.ListOfItems = new List<IEnumerable> ();
+		}
+	}
+
+	public class SimpleClass
+	{
+	}
 }
+
+namespace XamlTest
+{
+	public class Configurations : List<Configuration>
+	{
+		private Configuration active;
+		private bool isFrozen;
+
+		public Configuration Active {
+			get { return this.active; }
+			set {
+				if (this.isFrozen) {
+				throw new InvalidOperationException ("The 'Active' configuration can only be changed via modifying the source file (" + this.Source + ").");
+				}
+
+				this.active = value;
+			}
+		}
+
+		public string Source { get; private set; }
+	}
+
+	public class Configuration
+	{
+		public string Version { get; set; }
+
+		public string Path { get; set; }
+	}
+}
+
+// see bug #681480
+namespace SecondTest
+{
+	public class TypeOtherAssembly
+	{
+		[TypeConverter (typeof (NullableUintListConverter))]
+		public List<uint?> Values { get; set; }
+
+		public TypeOtherAssembly ()
+		{
+			this.Values = new List<uint?> ();
+		}
+	}
+
+	public class NullableUintListConverter : CustomTypeConverterBase
+	{
+		public override object ConvertFrom (System.ComponentModel.ITypeDescriptorContext context, System.Globalization.CultureInfo culture, object value)
+		{
+			string configValue = value as string;
+			if (string.IsNullOrWhiteSpace (configValue))
+				return null;
+
+			string delimiterStr = ", ";
+			char [] delimiters = delimiterStr.ToCharArray ();
+			string [] tokens = configValue.Split (delimiters, StringSplitOptions.RemoveEmptyEntries);
+
+			List<uint?> parsedList = new List<uint?> (tokens.Length);
+			foreach (string token in tokens)
+				parsedList.Add(uint.Parse(token));
+
+			return parsedList;
+		}
+
+		public override object ConvertTo (ITypeDescriptorContext context, CultureInfo culture, object value, Type destinationType)
+		{
+			var v = (List<uint?>) value;
+			return String.Join (", ", (from i in v select i.ToString ()).ToArray ());
+		}
+	}
+	
+	public class CustomTypeConverterBase : TypeConverter
+	{
+		public override bool CanConvertFrom (ITypeDescriptorContext context, Type sourceType)
+		{
+			if (sourceType == typeof (string))
+			{
+				return true;
+			}
+			return base.CanConvertFrom (context, sourceType);
+		}
+	}
+
+	#region bug #681202
+
+	[MarkupExtensionReturnType (typeof (object))]
+	public class ResourceExtension : MarkupExtension
+	{
+		[ConstructorArgument ("key")]
+		public object Key { get; set; }
+
+		public ResourceExtension (object key)
+		{
+			this.Key = key;
+		}
+
+		public override object ProvideValue (IServiceProvider serviceProvider)
+		{
+			IXamlSchemaContextProvider service = serviceProvider.GetService (typeof (IXamlSchemaContextProvider)) as IXamlSchemaContextProvider;
+			IAmbientProvider provider = serviceProvider.GetService (typeof (IAmbientProvider)) as IAmbientProvider;
+			Debug.Assert (provider != null, "The provider should not be null!");
+
+			XamlSchemaContext schemaContext = service.SchemaContext;
+			XamlType[] types = new XamlType [] { schemaContext.GetXamlType (typeof (ResourcesDict)) };
+
+			// ResourceDict is marked as Ambient, so the instance current being deserialized should be in this list.
+			List<AmbientPropertyValue> list = provider.GetAllAmbientValues (null, false, types) as List<AmbientPropertyValue>;
+			Debug.Assert (list.Count == 1, "expected ambient property count == 1 but " + list.Count);
+			for (int i = 0; i < list.Count; i++) {
+				AmbientPropertyValue value = list [i];
+				ResourcesDict dict = value.Value as ResourcesDict;
+
+				// For this example, we know that dict should not be null and that it is the only value in list.
+				object result = dict [this.Key];
+				return result;
+			}
+
+			return null;
+		}
+	}
+
+	[UsableDuringInitialization (true), Ambient]
+	public class ResourcesDict : Dictionary<object, object>
+	{
+		/*
+		public string Source { get; set; }
+		public void Load ()
+		{
+			ResourcesDict instance = XamlServices.Load (this.Source) as ResourcesDict;
+			foreach (var item in instance)
+			{
+				this.Add(item.Key, item.Value);
+			}
+		}
+		*/
+	}
+
+	public class TestObject
+	{
+		public TestObject TestProperty { get; set; }
+	}
+
+	#endregion
+}
+
+

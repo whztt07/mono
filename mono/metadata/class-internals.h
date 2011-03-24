@@ -17,8 +17,6 @@
 
 extern gboolean mono_print_vtable;
 
-typedef void     (*MonoStackWalkImpl) (MonoStackWalk func, gboolean do_il_offset, gpointer user_data);
-
 typedef struct _MonoMethodWrapper MonoMethodWrapper;
 typedef struct _MonoMethodInflated MonoMethodInflated;
 typedef struct _MonoMethodPInvoke MonoMethodPInvoke;
@@ -1152,9 +1150,6 @@ mono_icall_cleanup         (void) MONO_INTERNAL;
 gpointer
 mono_method_get_wrapper_data (MonoMethod *method, guint32 id) MONO_INTERNAL;
 
-void
-mono_install_stack_walk (MonoStackWalkImpl func) MONO_INTERNAL;
-
 gboolean
 mono_metadata_has_generic_params (MonoImage *image, guint32 token) MONO_INTERNAL;
 
@@ -1232,9 +1227,6 @@ gboolean
 mono_generic_class_is_generic_type_definition (MonoGenericClass *gklass) MONO_INTERNAL;
 
 MonoMethod*
-mono_method_get_declaring_generic_method (MonoMethod *method) MONO_INTERNAL;
-
-MonoMethod*
 mono_class_get_method_generic (MonoClass *klass, MonoMethod *method) MONO_INTERNAL;
 
 MonoType*
@@ -1301,5 +1293,8 @@ mono_class_check_vtable_constraints (MonoClass *class, GList *in_setup) MONO_INT
 
 gboolean
 mono_class_has_finalizer (MonoClass *klass) MONO_INTERNAL;
+
+void
+mono_unload_interface_id (MonoClass *class) MONO_INTERNAL;
 
 #endif /* __MONO_METADATA_CLASS_INTERBALS_H__ */

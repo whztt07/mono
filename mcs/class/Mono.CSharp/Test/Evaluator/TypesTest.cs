@@ -25,7 +25,10 @@ namespace MonoTests.EvaluatorTest
 			Evaluator.Run ("class X {}");
 			Evaluator.Run ("class X { public static string Foo () { return \"Test\"; } }");
 			object res = Evaluator.Evaluate ("X.Foo ();");
-			Assert.AreEqual ("Test", res);
+			Assert.AreEqual ("Test", res, "#1");
+			Evaluator.Run ("class X { public static int Foo () { return 5; } }");
+			res = Evaluator.Evaluate ("X.Foo ();");
+			Assert.AreEqual (5, res, "#2");
 		}
 
 		[Test]
@@ -43,6 +46,21 @@ namespace MonoTests.EvaluatorTest
 			Evaluator.Run ("struct Z { }");
 			object res = Evaluator.Evaluate ("typeof (Z);");
 			Assert.AreEqual ("Z", res.ToString ());
+		}
+
+		[Test]
+		public void UsingAfterType ()
+		{
+			Evaluator.Run ("struct Z { }");
+			Evaluator.Run ("using System;");
+			Evaluator.Run ("struct Z { }");
+		}
+
+		[Test]
+		public void GG ()
+		{
+			Evaluator.Run ("public class D { int x; public int X { get { return x; } set { x = value;} } };");
+			Evaluator.Run ("public class C { public int Speed{get;set;}};");
 		}
 	}
 }

@@ -35,6 +35,10 @@
 #include <mono/utils/mono-compiler.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/object-internals.h>
+#include <mono/metadata/sgen-archdep.h>
+#if defined(__MACH__)
+	#include <mach/mach_port.h>
+#endif
 
 /*
  * Turning on heavy statistics will turn off the managed allocator and
@@ -53,6 +57,8 @@
 //#define SGEN_BINARY_PROTOCOL
 
 #define SGEN_MAX_DEBUG_LEVEL 2
+
+//#define SGEN_DEBUG_INTERNAL_ALLOC
 
 #define THREAD_HASH_SIZE 11
 
@@ -73,6 +79,14 @@ typedef guint64 mword;
 #define SGEN_TV_ELAPSED(start,end) (int)((end-start) / 10)
 #define SGEN_TV_ELAPSED_MS(start,end) ((SGEN_TV_ELAPSED((start),(end)) + 500) / 1000)
 
+/* LOCKING: assumes the GC lock is held */
+#define FOREACH_THREAD(thread) { \
+	int __i;	\
+	for (__i = 0; __i < THREAD_HASH_SIZE; ++__i)	\
+		for ((thread) = thread_table [__i]; (thread); (thread) = (thread)->next) {
+
+#define END_FOREACH_THREAD }}
+
 /* for use with write barriers */
 typedef struct _RememberedSet RememberedSet;
 struct _RememberedSet {
@@ -88,6 +102,10 @@ typedef struct _SgenThreadInfo SgenThreadInfo;
 struct _SgenThreadInfo {
 	SgenThreadInfo *next;
 	ARCH_THREAD_TYPE id;
+#if defined(__MACH__)
+	thread_port_t mach_port;
+#endif
+	
 	unsigned int stop_count; /* to catch duplicate signals */
 	int signal;
 	int skip;
@@ -105,7 +123,20 @@ struct _SgenThreadInfo {
 	gpointer runtime_data;
 	gpointer stopped_ip;	/* only valid if the thread is stopped */
 	MonoDomain *stopped_domain; /* ditto */
+
+#if defined(__MACH__)
+#ifdef USE_MONO_CTX
+	MonoContext ctx;		/* ditto */
+#else
+	gpointer regs[ARCH_NUM_REGS];	    /* ditto */
+#endif
+#endif
+
+#ifdef USE_MONO_CTX
+	MonoContext *monoctx;	/* ditto */
+#else
 	gpointer *stopped_regs;	    /* ditto */
+#endif
 #ifndef HAVE_KW_THREAD
 	char *tlab_start;
 	char *tlab_next;
@@ -115,6 +146,8 @@ struct _SgenThreadInfo {
 	long store_remset_buffer_index;
 #endif
 };
+
+extern SgenThreadInfo* thread_table [THREAD_HASH_SIZE] MONO_INTERNAL;
 
 enum {
 	MEMORY_ROLE_GEN0,
@@ -580,7 +613,8 @@ void mono_sgen_free_os_memory (void *addr, size_t size) MONO_INTERNAL;
 
 int mono_sgen_thread_handshake (int signum) MONO_INTERNAL;
 SgenThreadInfo* mono_sgen_thread_info_lookup (ARCH_THREAD_TYPE id) MONO_INTERNAL;
-SgenThreadInfo** mono_sgen_get_thread_table (void) MONO_INTERNAL;
+SgenThreadInfo* mono_sgen_thread_info_current (void) MONO_INTERNAL;
+
 void mono_sgen_wait_for_suspend_ack (int count) MONO_INTERNAL;
 
 gboolean mono_sgen_is_worker_thread (pthread_t thread) MONO_INTERNAL;
@@ -615,12 +649,16 @@ enum {
 	INTERNAL_MEM_EPHEMERON_LINK,
 	INTERNAL_MEM_WORKER_DATA,
 	INTERNAL_MEM_BRIDGE_DATA,
+	INTERNAL_MEM_JOB_QUEUE_ENTRY,
 	INTERNAL_MEM_MAX
 };
 
 #define SGEN_INTERNAL_FREELIST_NUM_SLOTS	30
 
 struct _SgenInternalAllocator {
+#ifdef SGEN_DEBUG_INTERNAL_ALLOC
+	pthread_t thread;
+#endif
 	SgenPinnedChunk *chunk_list;
 	SgenPinnedChunk *free_lists [SGEN_INTERNAL_FREELIST_NUM_SLOTS];
 	void *delayed_free_lists [SGEN_INTERNAL_FREELIST_NUM_SLOTS];
@@ -661,6 +699,8 @@ void* mono_sgen_alloc_internal_full (SgenInternalAllocator *allocator, size_t si
 void mono_sgen_free_internal_full (SgenInternalAllocator *allocator, void *addr, size_t size, int type) MONO_INTERNAL;
 
 void mono_sgen_free_internal_delayed (void *addr, int type, SgenInternalAllocator *thread_allocator) MONO_INTERNAL;
+void mono_sgen_free_internal_dynamic_delayed (void *addr, size_t size, int type, SgenInternalAllocator *thread_allocator) MONO_INTERNAL;
+
 
 void mono_sgen_debug_printf (int level, const char *format, ...) MONO_INTERNAL;
 
@@ -677,7 +717,7 @@ void mono_sgen_pin_objects_in_section (GCMemSection *section, SgenGrayQueue *que
 
 void mono_sgen_pin_stats_register_object (char *obj, size_t size);
 
-void mono_sgen_add_to_global_remset (gpointer ptr) MONO_INTERNAL;
+void mono_sgen_add_to_global_remset (SgenInternalAllocator *alc, gpointer ptr) MONO_INTERNAL;
 
 int mono_sgen_get_current_collection_generation (void) MONO_INTERNAL;
 
@@ -730,6 +770,9 @@ struct _SgenMajorCollector {
 	void (*print_gc_param_usage) (void);
 	gboolean (*is_worker_thread) (pthread_t thread);
 	void (*post_param_init) (void);
+	void* (*alloc_worker_data) (void);
+	void (*init_worker_thread) (void *data);
+	void (*reset_worker_data) (void *data);
 };
 
 void mono_sgen_marksweep_init (SgenMajorCollector *collector) MONO_INTERNAL;

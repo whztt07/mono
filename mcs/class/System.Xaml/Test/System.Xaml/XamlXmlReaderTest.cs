@@ -620,5 +620,70 @@ namespace MonoTests.System.Xaml
 			while (!r.IsEof)
 				r.Read ();
 		}
+
+		[Test]
+		public void Read_TypeConverterOnListMember ()
+		{
+			var r = GetReader ("TypeConverterOnListMember.xml");
+			Read_TypeConverterOnListMember (r);
+		}
+
+		[Test]
+		public void Read_EnumContainer ()
+		{
+			var r = GetReader ("EnumContainer.xml");
+			Read_EnumContainer (r);
+		}
+
+		[Test]
+		public void Read_CollectionContentProperty ()
+		{
+			var r = GetReader ("CollectionContentProperty.xml");
+			Read_CollectionContentProperty (r, false);
+		}
+
+		[Test]
+		public void Read_CollectionContentProperty2 ()
+		{
+			// bug #681835
+			var r = GetReader ("CollectionContentProperty2.xml");
+			Read_CollectionContentProperty (r, true);
+		}
+
+		[Test]
+		public void Read_CollectionContentPropertyX ()
+		{
+			var r = GetReader ("CollectionContentPropertyX.xml");
+			Read_CollectionContentPropertyX (r, false);
+		}
+
+		[Test]
+		public void Read_CollectionContentPropertyX2 ()
+		{
+			var r = GetReader ("CollectionContentPropertyX2.xml");
+			Read_CollectionContentPropertyX (r, true);
+		}
+
+		[Test]
+		public void Read_AmbientPropertyContainer ()
+		{
+			var r = GetReader ("AmbientPropertyContainer.xml");
+			Read_AmbientPropertyContainer (r, false);
+		}
+
+		[Test]
+		public void Read_AmbientPropertyContainer2 ()
+		{
+			var r = GetReader ("AmbientPropertyContainer2.xml");
+			Read_AmbientPropertyContainer (r, true);
+		}
+
+		#region non-common tests
+		[Test]
+		public void Bug680385 ()
+		{
+			XamlServices.Load ("Test/XmlFiles/CurrentVersion.xaml");
+		}
+		#endregion
 	}
 }

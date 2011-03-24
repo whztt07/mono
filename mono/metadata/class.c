@@ -2392,6 +2392,16 @@ mono_unload_interface_ids (MonoBitSet *bitset)
 	mono_loader_unlock ();
 }
 
+void
+mono_unload_interface_id (MonoClass *class)
+{
+	if (class->interface_id) {
+		mono_loader_lock ();
+		mono_bitset_clear (global_interface_bitset, class->interface_id);
+		mono_loader_unlock ();
+	}
+}
+
 /*
  * mono_get_unique_iid:
  * @class: interface
@@ -2422,16 +2432,18 @@ mono_get_unique_iid (MonoClass *class)
 	}
 	mono_bitset_set (global_interface_bitset, iid);
 	/* set the bit also in the per-image set */
-	if (class->image->interface_bitset) {
-		if (iid >= mono_bitset_size (class->image->interface_bitset)) {
-			MonoBitSet *new_set = mono_bitset_clone (class->image->interface_bitset, iid + 1);
-			mono_bitset_free (class->image->interface_bitset);
-			class->image->interface_bitset = new_set;
+	if (!class->generic_class) {
+		if (class->image->interface_bitset) {
+			if (iid >= mono_bitset_size (class->image->interface_bitset)) {
+				MonoBitSet *new_set = mono_bitset_clone (class->image->interface_bitset, iid + 1);
+				mono_bitset_free (class->image->interface_bitset);
+				class->image->interface_bitset = new_set;
+			}
+		} else {
+			class->image->interface_bitset = mono_bitset_new (iid + 1, 0);
 		}
-	} else {
-		class->image->interface_bitset = mono_bitset_new (iid + 1, 0);
+		mono_bitset_set (class->image->interface_bitset, iid);
 	}
-	mono_bitset_set (class->image->interface_bitset, iid);
 
 #ifndef MONO_SMALL_CONFIG
 	if (mono_print_vtable) {
@@ -3526,6 +3538,18 @@ print_method_signatures (MonoMethod *im, MonoMethod *cm) {
 
 #endif
 static gboolean
+is_wcf_hack_disabled (void)
+{
+	static gboolean disabled;
+	static gboolean inited = FALSE;
+	if (!inited) {
+		disabled = g_getenv ("MONO_DISABLE_WCF_HACK") != NULL;
+		inited = TRUE;
+	}
+	return disabled;
+}
+
+static gboolean
 check_interface_method_override (MonoClass *class, MonoMethod *im, MonoMethod *cm, gboolean require_newslot, gboolean interface_is_explicitly_implemented_by_class, gboolean slot_is_empty, gboolean security_enabled) {
 	MonoMethodSignature *cmsig, *imsig;
 	if (strcmp (im->name, cm->name) == 0) {
@@ -3569,6 +3593,15 @@ check_interface_method_override (MonoClass *class, MonoMethod *im, MonoMethod *c
 		if (mono_security_get_mode () == MONO_SECURITY_MODE_CORE_CLR)
 			mono_security_core_clr_check_override (class, cm, im);
 		TRACE_INTERFACE_VTABLE (printf ("[NAME CHECK OK]"));
+		if (is_wcf_hack_disabled () && !mono_method_can_access_method_full (cm, im, NULL)) {
+			char *body_name = mono_method_full_name (cm, TRUE);
+			char *decl_name = mono_method_full_name (im, TRUE);
+			mono_class_set_failure (class, MONO_EXCEPTION_TYPE_LOAD, g_strdup_printf ("Method %s overrides method '%s' which is not accessible", body_name, decl_name));
+			g_free (body_name);
+			g_free (decl_name);
+			return FALSE;
+		}
+
 		return TRUE;
 	} else {
 		MonoClass *ic = im->klass;
@@ -3646,6 +3679,15 @@ check_interface_method_override (MonoClass *class, MonoMethod *im, MonoMethod *c
 			mono_security_core_clr_check_override (class, cm, im);
 		
 		TRACE_INTERFACE_VTABLE (printf ("[INJECTED INTERFACE CHECK OK]"));
+		if (is_wcf_hack_disabled () && !mono_method_can_access_method_full (cm, im, NULL)) {
+			char *body_name = mono_method_full_name (cm, TRUE);
+			char *decl_name = mono_method_full_name (im, TRUE);
+			mono_class_set_failure (class, MONO_EXCEPTION_TYPE_LOAD, g_strdup_printf ("Method %s overrides method '%s' which is not accessible", body_name, decl_name));
+			g_free (body_name);
+			g_free (decl_name);
+			return FALSE;
+		}
+		
 		return TRUE;
 	}
 }
@@ -3790,6 +3832,14 @@ print_unimplemented_interface_method_info (MonoClass *class, MonoClass *ic, Mono
 	}
 }
 
+static MonoMethod*
+mono_method_get_method_definition (MonoMethod *method)
+{
+	while (method->is_inflated)
+		method = ((MonoMethodInflated*)method)->declaring;
+	return method;
+}
+
 static gboolean
 verify_class_overrides (MonoClass *class, MonoMethod **overrides, int onum)
 {
@@ -3822,6 +3872,18 @@ verify_class_overrides (MonoClass *class, MonoMethod **overrides, int onum)
 
 		if (!mono_class_is_assignable_from_slow (decl->klass, class)) {
 			mono_class_set_failure (class, MONO_EXCEPTION_TYPE_LOAD, g_strdup ("Method overrides a class or interface that extended or implemented by this type"));
+			return FALSE;
+		}
+
+		body = mono_method_get_method_definition (body);
+		decl = mono_method_get_method_definition (decl);
+
+		if (is_wcf_hack_disabled () && !mono_method_can_access_method_full (body, decl, NULL)) {
+			char *body_name = mono_method_full_name (body, TRUE);
+			char *decl_name = mono_method_full_name (decl, TRUE);
+			mono_class_set_failure (class, MONO_EXCEPTION_TYPE_LOAD, g_strdup_printf ("Method %s overrides method '%s' which is not accessible", body_name, decl_name));
+			g_free (body_name);
+			g_free (decl_name);
 			return FALSE;
 		}
 	}
@@ -4202,6 +4264,15 @@ mono_class_setup_vtable_general (MonoClass *class, MonoMethod **overrides, int o
 						slot = mono_method_get_vtable_slot (m1);
 						if (slot == -1)
 							goto fail;
+
+						if (is_wcf_hack_disabled () && !mono_method_can_access_method_full (cm, m1, NULL)) {
+							char *body_name = mono_method_full_name (cm, TRUE);
+							char *decl_name = mono_method_full_name (m1, TRUE);
+							mono_class_set_failure (class, MONO_EXCEPTION_TYPE_LOAD, g_strdup_printf ("Method %s overrides method '%s' which is not accessible", body_name, decl_name));
+							g_free (body_name);
+							g_free (decl_name);
+							goto fail;
+						}
 
 						g_assert (cm->slot < max_vtsize);
 						if (!override_map)
@@ -5626,10 +5697,6 @@ make_generic_param_class (MonoGenericParam *param, MonoImage *image, gboolean is
 }
 
 #define FAST_CACHE_SIZE 16
-static MonoClass *var_cache_fast [FAST_CACHE_SIZE];
-static MonoClass *mvar_cache_fast [FAST_CACHE_SIZE];
-static GHashTable *var_cache_slow;
-static GHashTable *mvar_cache_slow;
 
 void clear_anon_gparam_cache()
 {
@@ -5649,31 +5716,60 @@ static MonoClass *
 get_anon_gparam_class (MonoGenericParam *param, gboolean is_mvar)
 {
 	int n = mono_generic_param_num (param);
+	MonoImage *image = param->image;
 	GHashTable *ht;
 
-	if (n < FAST_CACHE_SIZE)
-		return (is_mvar ? mvar_cache_fast : var_cache_fast) [n];
-	ht = is_mvar ? mvar_cache_slow : var_cache_slow;
-	return ht ? g_hash_table_lookup (ht, GINT_TO_POINTER (n)) : NULL;
+	g_assert (image);
+
+	if (n < FAST_CACHE_SIZE) {
+		if (is_mvar)
+			return image->mvar_cache_fast ? image->mvar_cache_fast [n] : NULL;
+		else
+			return image->var_cache_fast ? image->var_cache_fast [n] : NULL;
+	} else {
+		ht = is_mvar ? image->mvar_cache_slow : image->var_cache_slow;
+		return ht ? g_hash_table_lookup (ht, GINT_TO_POINTER (n)) : NULL;
+	}
 }
 
+/*
+ * LOCKING: Acquires the loader lock.
+ */
 static void
 set_anon_gparam_class (MonoGenericParam *param, gboolean is_mvar, MonoClass *klass)
 {
 	int n = mono_generic_param_num (param);
+	MonoImage *image = param->image;
 	GHashTable *ht;
 
+	g_assert (image);
+
 	if (n < FAST_CACHE_SIZE) {
-		(is_mvar ? mvar_cache_fast : var_cache_fast) [n] = klass;
+		if (is_mvar) {
+			/* No locking needed */
+			if (!image->mvar_cache_fast)
+				image->mvar_cache_fast = mono_image_alloc0 (image, sizeof (MonoClass*) * FAST_CACHE_SIZE);
+			image->mvar_cache_fast [n] = klass;
+		} else {
+			if (!image->var_cache_fast)
+				image->var_cache_fast = mono_image_alloc0 (image, sizeof (MonoClass*) * FAST_CACHE_SIZE);
+			image->var_cache_fast [n] = klass;
+		}
 		return;
 	}
-	ht = is_mvar ? mvar_cache_slow : var_cache_slow;
+	ht = is_mvar ? image->mvar_cache_slow : image->var_cache_slow;
 	if (!ht) {
-		ht = g_hash_table_new (NULL, NULL);
-		if (is_mvar)
-			mvar_cache_slow = ht;
-		else
-			var_cache_slow = ht;
+		mono_loader_lock ();
+		ht = is_mvar ? image->mvar_cache_slow : image->var_cache_slow;
+		if (!ht) {
+			ht = g_hash_table_new (NULL, NULL);
+			mono_memory_barrier ();
+			if (is_mvar)
+				image->mvar_cache_slow = ht;
+			else
+				image->var_cache_slow = ht;
+		}
+		mono_loader_unlock ();
 	}
 
 	g_hash_table_insert (ht, GINT_TO_POINTER (n), klass);
@@ -9011,6 +9107,9 @@ can_access_type (MonoClass *access_klass, MonoClass *member_klass)
 {
 	int access_level;
 
+	if (access_klass->image->assembly && access_klass->image->assembly->corlib_internal)
+		return TRUE;
+
 	if (access_klass->element_class && !access_klass->enumtype)
 		access_klass = access_klass->element_class;
 
@@ -9070,6 +9169,9 @@ static gboolean
 can_access_member (MonoClass *access_klass, MonoClass *member_klass, MonoClass* context_klass, int access_level)
 {
 	MonoClass *member_generic_def;
+	if (access_klass->image->assembly && access_klass->image->assembly->corlib_internal)
+		return TRUE;
+
 	if (((access_klass->generic_class && access_klass->generic_class->container_class) ||
 					access_klass->generic_container) && 
 			(member_generic_def = get_generic_definition_class (member_klass))) {

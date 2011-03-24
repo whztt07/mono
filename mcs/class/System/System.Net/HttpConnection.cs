@@ -40,6 +40,7 @@ using Mono.Security.Protocol.Tls;
 namespace System.Net {
 	sealed class HttpConnection
 	{
+		static AsyncCallback onread_cb = new AsyncCallback (OnRead);
 		const int BufferSize = 8192;
 		Socket sock;
 		Stream stream;
@@ -142,10 +143,11 @@ namespace System.Net {
 				if (reuses == 1)
 					s_timeout = 15000;
 				timer.Change (s_timeout, Timeout.Infinite);
-				stream.BeginRead (buffer, 0, BufferSize, OnRead, this);
+				stream.BeginRead (buffer, 0, BufferSize, onread_cb, this);
 			} catch {
 				timer.Change (Timeout.Infinite, Timeout.Infinite);
 				CloseSocket ();
+				Unbind ();
 			}
 		}
 
@@ -177,10 +179,15 @@ namespace System.Net {
 			return o_stream;
 		}
 
-		void OnRead (IAsyncResult ares)
+		static void OnRead (IAsyncResult ares)
+		{
+			HttpConnection cnc = (HttpConnection) ares.AsyncState;
+			cnc.OnReadInternal (ares);
+		}
+
+		void OnReadInternal (IAsyncResult ares)
 		{
 			timer.Change (Timeout.Infinite, Timeout.Infinite);
-			HttpConnection cnc = (HttpConnection) ares.AsyncState;
 			int nread = -1;
 			try {
 				nread = stream.EndRead (ares);
@@ -193,8 +200,10 @@ namespace System.Net {
 			} catch {
 				if (ms != null && ms.Length > 0)
 					SendError ();
-				if (sock != null)
+				if (sock != null) {
 					CloseSocket ();
+					Unbind ();
+				}
 				return;
 			}
 
@@ -202,6 +211,7 @@ namespace System.Net {
 				//if (ms.Length > 0)
 				//	SendError (); // Why bother?
 				CloseSocket ();
+				Unbind ();
 				return;
 			}
 
@@ -218,20 +228,28 @@ namespace System.Net {
 				if (!epl.BindContext (context)) {
 					SendError ("Invalid host", 400);
 					Close (true);
+					return;
 				}
-				if (last_listener == null)
-					epl.RemoveConnection (this);
-				else
-					last_listener.RemoveConnection (this);
+				HttpListener listener = context.Listener;
+				if (last_listener != listener) {
+					RemoveConnection ();
+					listener.AddConnection (this);
+					last_listener = listener;
+				}
 
-				if (context.Listener != null) {
-					context.Listener.AddConnection (this);
-					context_bound = true;
-				}
-				last_listener = context.Listener;
+				context_bound = true;
+				listener.RegisterContext (context);
 				return;
 			}
-			stream.BeginRead (buffer, 0, BufferSize, OnRead, cnc);
+			stream.BeginRead (buffer, 0, BufferSize, onread_cb, this);
+		}
+
+		void RemoveConnection ()
+		{
+			if (last_listener == null)
+				epl.RemoveConnection (this);
+			else
+				last_listener.RemoveConnection (this);
 		}
 
 		enum InputState {
@@ -390,8 +408,7 @@ namespace System.Net {
 			} finally {
 				sock = null;
 			}
-			if (last_listener == null)
-				epl.RemoveConnection (this);
+			RemoveConnection ();
 		}
 
 		internal void Close (bool force_close)
@@ -444,8 +461,7 @@ namespace System.Net {
 						s.Close ();
 				}
 				Unbind ();
-				if (last_listener == null)
-					epl.RemoveConnection (this);
+				RemoveConnection ();
 				return;
 			}
 		}

@@ -11,16 +11,12 @@
 
 #ifdef _MSC_VER
 #pragma include_alias(<eglib-config.h>, <eglib-config.hw>)
+#endif
+
+/* VS 2010 and later have stdint.h */
+#if defined(_MSC_VER) && _MSC_VER < 1600
 #else
 #include <stdint.h>
-/* For pid_t */
-#ifndef WIN32
-#include <unistd.h>
-#else
-#ifdef HAVE_SYS_TYPES_H
-#include <sys/types.h>
-#endif
-#endif
 #endif
 
 #include <eglib-config.h>
@@ -53,6 +49,12 @@
 
 G_BEGIN_DECLS
 
+#ifdef G_OS_WIN32
+/* MSC and Cross-compilatin will use this */
+int vasprintf (char **strp, const char *fmt, va_list ap);
+#endif
+
+
 /*
  * Basic data types
  */
@@ -68,7 +70,8 @@ typedef char           gchar;
 typedef unsigned char  guchar;
 
 #if !G_TYPES_DEFINED
-#ifdef _MSC_VER
+/* VS 2010 and later have stdint.h */
+#if defined(_MSC_VER) && _MSC_VER < 1600
 typedef __int8				gint8;
 typedef unsigned __int8		guint8;
 typedef __int16				gint16;
@@ -238,9 +241,6 @@ gboolean g_int_equal    (gconstpointer v1, gconstpointer v2);
 guint    g_int_hash     (gconstpointer v1);
 gboolean g_str_equal    (gconstpointer v1, gconstpointer v2);
 guint    g_str_hash     (gconstpointer v1);
-
-#define  g_assert(x)     G_STMT_START { if (!(x)) g_assertion_message ("* Assertion at %s:%d, condition `%s' not met\n", __FILE__, __LINE__, #x);  } G_STMT_END
-#define  g_assert_not_reached() G_STMT_START { g_assertion_message ("* Assertion: should not be reached at %s:%d\n", __FILE__, __LINE__); } G_STMT_END
 
 /*
  * Errors
@@ -657,6 +657,9 @@ gint           g_unichar_xdigit_value (gunichar c);
 #define G_UNLIKELY(x) (x)
 #endif
 
+#define  g_assert(x)     G_STMT_START { if (G_UNLIKELY (!(x))) g_assertion_message ("* Assertion at %s:%d, condition `%s' not met\n", __FILE__, __LINE__, #x);  } G_STMT_END
+#define  g_assert_not_reached() G_STMT_START { g_assertion_message ("* Assertion: should not be reached at %s:%d\n", __FILE__, __LINE__); } G_STMT_END
+
 /*
  * Unicode conversion
  */
@@ -682,7 +685,7 @@ gunichar  *g_utf16_to_ucs4 (const gunichar2 *str, glong len, glong *items_read, 
 #define u8to16(str) g_utf8_to_utf16(str, (glong)strlen(str), NULL, NULL, NULL)
 
 #ifdef G_OS_WIN32
-#define u16to8(str) g_utf16_to_utf8(str, (glong)wcslen(str), NULL, NULL, NULL)
+#define u16to8(str) g_utf16_to_utf8((gunichar2 *) (str), (glong)wcslen((wchar_t *) (str)), NULL, NULL, NULL)
 #else
 #define u16to8(str) g_utf16_to_utf8(str, (glong)strlen(str), NULL, NULL, NULL)
 #endif
@@ -724,8 +727,6 @@ typedef enum {
 	G_SPAWN_CHILD_INHERITS_STDIN   = 1 << 5,
 	G_SPAWN_FILE_AND_ARGV_ZERO     = 1 << 6
 } GSpawnFlags;
-
-typedef pid_t GPid;
 
 typedef void (*GSpawnChildSetupFunc) (gpointer user_data);
 

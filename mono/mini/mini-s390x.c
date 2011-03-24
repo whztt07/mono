@@ -4733,7 +4733,7 @@ mono_arch_register_lowlevel_calls (void)
 
 void
 mono_arch_patch_code (MonoMethod *method, MonoDomain *domain, 
-		      guint8 *code, MonoJumpInfo *ji, gboolean run_cctors)
+		      guint8 *code, MonoJumpInfo *ji, MonoCodeManager *dyn_code_mp, gboolean run_cctors)
 {
 	MonoJumpInfo *patch_info;
 
@@ -5095,9 +5095,30 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 		pos++;
 	}
 
+	if (method->wrapper_type == MONO_WRAPPER_NATIVE_TO_MANAGED) {
+		if (cfg->compile_aot)
+			/* AOT code is only used in the root domain */
+			s390_lghi (code, s390_r2, 0);
+		else {
+			s390_basr(code, s390_r14, 0);
+			s390_j   (code, 6);
+			s390_llong(code, cfg->domain);
+			s390_lg	 (code, s390_r2, 0, s390_r14, 4);
+		}
+
+		s390_basr(code, s390_r14, 0);
+		s390_j   (code, 6);
+		mono_add_patch_info (cfg, code - cfg->native_code, 
+				     MONO_PATCH_INFO_INTERNAL_METHOD, 
+				     (gpointer)"mono_jit_thread_attach");
+		s390_llong(code, 0);
+		s390_lg   (code, s390_r1, 0, s390_r14, 4);
+		s390_basr (code, s390_r14, s390_r1);
+	}
+
 	if (method->save_lmf) {
 		/*---------------------------------------------------------------*/
-		/* we build the MonoLMF structure on the stack - see mini-s390.h */
+		/* build the MonoLMF structure on the stack - see mini-s390x.h   */
 		/*---------------------------------------------------------------*/
 		lmfOffset = alloc_size - sizeof(MonoLMF);	
 											

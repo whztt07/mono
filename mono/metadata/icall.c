@@ -27,6 +27,9 @@
 #if defined (HOST_WIN32)
 #include <stdlib.h>
 #endif
+#if defined (HAVE_WCHAR_H)
+#include <wchar.h>
+#endif
 
 #include "mono/utils/mono-membar.h"
 #include <mono/metadata/object.h>
@@ -6616,6 +6619,17 @@ ves_icall_System_Environment_GetLogicalDrives (void)
 		g_free (ptr);
 
 	return result;
+}
+
+static MonoString *
+ves_icall_System_IO_DriveInfo_GetDriveFormat (MonoString *path)
+{
+	gunichar2 volume_name [MAX_PATH + 1];
+	
+	if (GetVolumeInformation (mono_string_chars (path), NULL, 0, NULL, NULL, NULL, volume_name, MAX_PATH + 1) == FALSE)
+		return NULL;
+	/* Not sure using wcslen here is safe */
+	return mono_string_from_utf16 (volume_name);
 }
 
 static MonoString *

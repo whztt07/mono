@@ -535,7 +535,7 @@ EXTRA_DIST=test-driver $(TEST_CS_SRC_DIST) $(TEST_IL_SRC) \
 
 # mkbundle works on ppc, but the pkg-config POC doesn't when run with make test
 if POWERPC
-test_platform:	testbundle
+test_platform:
 else
 # Can't use mkbundle on win32 since there is no static build there
 # Can't run test-unhandled-exception on Windows because of all the debug popups...
@@ -895,7 +895,7 @@ test-process-exit:
 	@$(MCS) $(srcdir)/bug-438454.cs -out:bug-438454.exe
 	@echo "Testing bug-438454.exe..."
 	@$(RUNTIME) bug-438454.exe > bug-438454.exe.stdout
-	@diff bug-438454.exe.stdout $(srcdir)/bug-438454.exe.stdout.expected
+	@diff -w bug-438454.exe.stdout $(srcdir)/bug-438454.exe.stdout.expected
 
 OOM_TESTS =	\
 	gc-oom-handling.exe	\

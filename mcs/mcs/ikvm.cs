@@ -22,7 +22,7 @@ namespace Mono.CSharp
 #if !STATIC
 	public class StaticImporter
 	{
-		public StaticImporter (BuildinTypes buildin)
+		public StaticImporter (BuiltinTypes builtin)
 		{
 			throw new NotSupportedException ();
 		}
@@ -47,7 +47,8 @@ namespace Mono.CSharp
 
 	sealed class StaticImporter : MetadataImporter
 	{
-		public StaticImporter ()
+		public StaticImporter (ModuleContainer module)
+			: base (module)
 		{
 		}
 
@@ -113,12 +114,12 @@ namespace Mono.CSharp
 			return module_definition;
 		}
 
-		public void InitializeBuildinTypes (BuildinTypes buildin, Assembly corlib)
+		public void InitializeBuiltinTypes (BuiltinTypes builtin, Assembly corlib)
 		{
 			//
 			// Setup mapping for build-in types to avoid duplication of their definition
 			//
-			foreach (var type in buildin.AllTypes) {
+			foreach (var type in builtin.AllTypes) {
 				compiled_types.Add (corlib.GetType (type.FullName), type);
 			}
 		}
@@ -157,7 +158,7 @@ namespace Mono.CSharp
 				Builder.__SetImageRuntimeVersion (loader.Corlib.ImageRuntimeVersion, 0x20000);
 			} else {
 				// Sets output file metadata version when there is no mscorlib
-				switch (RootContext.StdLibRuntimeVersion) {
+				switch (module.Compiler.Settings.StdLibRuntimeVersion) {
 				case RuntimeVersion.v4:
 					Builder.__SetImageRuntimeVersion ("v4.0.30319", 0x20000);
 					break;
@@ -218,7 +219,7 @@ namespace Mono.CSharp
 			string fx_path = corlib_path.Substring (0, corlib_path.LastIndexOf (Path.DirectorySeparatorChar));
 			string sdk_path = null;
 
-			string sdk_version = RootContext.SdkVersion ?? "4";
+			string sdk_version = compiler.Settings.SdkVersion ?? "4";
 			string[] sdk_sub_dirs;
 
 			if (!sdk_directory.TryGetValue (sdk_version, out sdk_sub_dirs))
@@ -354,18 +355,18 @@ namespace Mono.CSharp
 
 			default_references.Add ("System.dll");
 			default_references.Add ("System.Xml.dll");
+			default_references.Add ("System.Core.dll");
 
-			if (RootContext.Version > LanguageVersion.ISO_2)
-				default_references.Add ("System.Core.dll");
-			if (RootContext.Version > LanguageVersion.V_3)
+			if (corlib != null && corlib.GetName ().Version.Major >= 4) {
 				default_references.Add ("Microsoft.CSharp.dll");
+			}
 
 			return default_references.ToArray ();
 		}
 
 		public override bool HasObjectType (Assembly assembly)
 		{
-			return assembly.GetType (compiler.BuildinTypes.Object.FullName) != null;
+			return assembly.GetType (compiler.BuiltinTypes.Object.FullName) != null;
 		}
 
 		public override Assembly LoadAssemblyFile (string fileName)
@@ -373,7 +374,7 @@ namespace Mono.CSharp
 			bool? has_extension = null;
 			foreach (var path in paths) {
 				var file = Path.Combine (path, fileName);
-				if (Report.DebugFlags > 0)
+				if (compiler.Settings.DebugFlags > 0)
 					Console.WriteLine ("Probing assembly location `{0}'", file);
 
 				if (!File.Exists (file)) {
@@ -427,7 +428,7 @@ namespace Mono.CSharp
 							}
 						}
 
-						if (Report.DebugFlags > 0)
+						if (compiler.Settings.DebugFlags > 0)
 							Console.WriteLine ("Loading assembly `{0}'", fileName);
 
 						var assembly = domain.LoadAssembly (module);
@@ -479,14 +480,14 @@ namespace Mono.CSharp
 			foreach (var path in paths) {
 				var file = Path.Combine (path, assembly);
 
-				if (Report.DebugFlags > 0)
+				if (compiler.Settings.DebugFlags > 0)
 					Console.WriteLine ("Probing default assembly location `{0}'", file);
 
 				if (!File.Exists (file))
 					continue;
 
 				try {
-					if (Report.DebugFlags > 0)
+					if (compiler.Settings.DebugFlags > 0)
 						Console.WriteLine ("Loading default assembly `{0}'", file);
 
 					var a = domain.LoadFile (file);
@@ -515,7 +516,7 @@ namespace Mono.CSharp
 				// System.Object was not found in any referenced assembly, use compiled assembly as corlib
 				corlib = module.DeclaringAssembly.Builder;
 			} else {
-				importer.InitializeBuildinTypes (compiler.BuildinTypes, corlib);
+				importer.InitializeBuiltinTypes (compiler.BuiltinTypes, corlib);
 				importer.ImportAssembly (corlib, module.GlobalRootNamespace);
 			}
 
@@ -528,10 +529,7 @@ namespace Mono.CSharp
 
 		public void LoadModules (AssemblyDefinitionStatic assembly, RootNamespace targetNamespace)
 		{
-			if (RootContext.Modules.Count == 0)
-				return;
-
-			foreach (var moduleName in RootContext.Modules) {
+			foreach (var moduleName in compiler.Settings.Modules) {
 				var m = LoadModuleFile (moduleName);
 				if (m == null)
 					continue;

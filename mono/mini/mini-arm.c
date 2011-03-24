@@ -37,6 +37,7 @@ static gint lmf_addr_tls_offset = -1;
 static CRITICAL_SECTION mini_arch_mutex;
 
 static int v5_supported = 0;
+static int v6_supported = 0;
 static int v7_supported = 0;
 static int thumb_supported = 0;
 /*
@@ -265,6 +266,90 @@ emit_move_return_value (MonoCompile *cfg, MonoInst *ins, guint8 *code)
 #endif
 		break;
 	}
+
+	return code;
+}
+
+/*
+ * emit_save_lmf:
+ *
+ *   Emit code to push an LMF structure on the LMF stack.
+ * On arm, this is intermixed with the initialization of other fields of the structure.
+ */
+static guint8*
+emit_save_lmf (MonoCompile *cfg, guint8 *code, gint32 lmf_offset)
+{
+	gboolean get_lmf_fast = FALSE;
+
+#ifdef HAVE_AEABI_READ_TP
+	gint32 lmf_addr_tls_offset = mono_get_lmf_addr_tls_offset ();
+
+	if (lmf_addr_tls_offset != -1) {
+		get_lmf_fast = TRUE;
+
+		mono_add_patch_info (cfg, code - cfg->native_code, MONO_PATCH_INFO_INTERNAL_METHOD, 
+							 (gpointer)"__aeabi_read_tp");
+		code = emit_call_seq (cfg, code);
+
+		ARM_LDR_IMM (code, ARMREG_R0, ARMREG_R0, lmf_addr_tls_offset);
+		get_lmf_fast = TRUE;
+	}
+#endif
+	if (!get_lmf_fast) {
+		mono_add_patch_info (cfg, code - cfg->native_code, MONO_PATCH_INFO_INTERNAL_METHOD, 
+								 (gpointer)"mono_get_lmf_addr");
+		code = emit_call_seq (cfg, code);
+	}
+	/* we build the MonoLMF structure on the stack - see mini-arm.h */
+	/* lmf_offset is the offset from the previous stack pointer,
+	 * alloc_size is the total stack space allocated, so the offset
+	 * of MonoLMF from the current stack ptr is alloc_size - lmf_offset.
+	 * The pointer to the struct is put in r1 (new_lmf).
+	 * ip is used as scratch
+	 * The callee-saved registers are already in the MonoLMF structure
+	 */
+	code = emit_big_add (code, ARMREG_R1, ARMREG_SP, lmf_offset);
+	/* r0 is the result from mono_get_lmf_addr () */
+	ARM_STR_IMM (code, ARMREG_R0, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, lmf_addr));
+	/* new_lmf->previous_lmf = *lmf_addr */
+	ARM_LDR_IMM (code, ARMREG_IP, ARMREG_R0, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
+	ARM_STR_IMM (code, ARMREG_IP, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
+	/* *(lmf_addr) = r1 */
+	ARM_STR_IMM (code, ARMREG_R1, ARMREG_R0, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
+	/* Skip method (only needed for trampoline LMF frames) */
+	ARM_STR_IMM (code, ARMREG_SP, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, esp));
+	/* save the current IP */
+	ARM_MOV_REG_REG (code, ARMREG_IP, ARMREG_PC);
+	ARM_STR_IMM (code, ARMREG_IP, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, eip));
+
+	return code;
+}
+
+/*
+ * emit_save_lmf:
+ *
+ *   Emit code to pop an LMF structure from the LMF stack.
+ */
+static guint8*
+emit_restore_lmf (MonoCompile *cfg, guint8 *code, gint32 lmf_offset)
+{
+	int basereg, offset;
+
+	if (lmf_offset < 32) {
+		basereg = cfg->frame_reg;
+		offset = lmf_offset;
+	} else {
+		basereg = ARMREG_R2;
+		offset = 0;
+		code = emit_big_add (code, ARMREG_R2, cfg->frame_reg, lmf_offset);
+	}
+
+	/* ip = previous_lmf */
+	ARM_LDR_IMM (code, ARMREG_IP, basereg, offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf));
+	/* lr = lmf_addr */
+	ARM_LDR_IMM (code, ARMREG_LR, basereg, offset + G_STRUCT_OFFSET (MonoLMF, lmf_addr));
+	/* *(lmf_addr) = previous_lmf */
+	ARM_STR_IMM (code, ARMREG_IP, ARMREG_LR, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
 
 	return code;
 }
@@ -508,6 +593,7 @@ mono_arch_cpu_optimizazions (guint32 *exclude_mask)
 		thumb_supported = strstr (cpu_arch, "thumb") != NULL;
 		if (strncmp (cpu_arch, "armv", 4) == 0) {
 			v5_supported = cpu_arch [4] >= '5';
+			v6_supported = cpu_arch [4] >= '6';
 			v7_supported = cpu_arch [4] >= '7';
 		}
 	} else {
@@ -526,6 +612,8 @@ mono_arch_cpu_optimizazions (guint32 *exclude_mask)
 				char *ver = strstr (line, "(v");
 				if (ver && (ver [2] == '5' || ver [2] == '6' || ver [2] == '7'))
 					v5_supported = TRUE;
+				if (ver && (ver [2] == '6' || ver [2] == '7'))
+					v6_supported = TRUE;
 				if (ver && (ver [2] == '7'))
 					v7_supported = TRUE;
 				continue;
@@ -1181,6 +1269,10 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 		cfg->param_area = MAX (cfg->param_area, sizeof (gpointer)*8);
 
 	header = cfg->header;
+
+	/* See mono_arch_get_global_int_regs () */
+	if (cfg->flags & MONO_CFG_HAS_CALLS)
+		cfg->uses_rgctx_reg = TRUE;
 
 	if (cfg->frame_reg != ARMREG_SP)
 		cfg->used_int_regs |= 1 << cfg->frame_reg;
@@ -2821,7 +2913,7 @@ search_thunk_slot (void *data, int csize, int bsize, void *user_data) {
 }
 
 static void
-handle_thunk (MonoDomain *domain, int absolute, guchar *code, const guchar *target)
+handle_thunk (MonoDomain *domain, int absolute, guchar *code, const guchar *target, MonoCodeManager *dyn_code_mp)
 {
 	PatchData pdata;
 
@@ -2833,23 +2925,53 @@ handle_thunk (MonoDomain *domain, int absolute, guchar *code, const guchar *targ
 	pdata.absolute = absolute;
 	pdata.found = 0;
 
-	mono_domain_lock (domain);
-	mono_domain_code_foreach (domain, search_thunk_slot, &pdata);
-
-	if (!pdata.found) {
-		/* this uses the first available slot */
-		pdata.found = 2;
-		mono_domain_code_foreach (domain, search_thunk_slot, &pdata);
+	if (dyn_code_mp) {
+		mono_code_manager_foreach (dyn_code_mp, search_thunk_slot, &pdata);
 	}
-	mono_domain_unlock (domain);
 
+	if (pdata.found != 1) {
+		mono_domain_lock (domain);
+		mono_domain_code_foreach (domain, search_thunk_slot, &pdata);
+
+		if (!pdata.found) {
+			/* this uses the first available slot */
+			pdata.found = 2;
+			mono_domain_code_foreach (domain, search_thunk_slot, &pdata);
+		}
+		mono_domain_unlock (domain);
+	}
+
+	if (pdata.found != 1) {
+		GHashTable *hash;
+		GHashTableIter iter;
+		MonoJitDynamicMethodInfo *ji;
+
+		/*
+		 * This might be a dynamic method, search its code manager. We can only
+		 * use the dynamic method containing CODE, since the others might be freed later.
+		 */
+		pdata.found = 0;
+
+		mono_domain_lock (domain);
+		hash = domain_jit_info (domain)->dynamic_code_hash;
+		if (hash) {
+			/* FIXME: Speed this up */
+			g_hash_table_iter_init (&iter, hash);
+			while (g_hash_table_iter_next (&iter, NULL, (gpointer*)&ji)) {
+				mono_code_manager_foreach (ji->code_mp, search_thunk_slot, &pdata);
+				if (pdata.found == 1)
+					break;
+			}
+		}
+		mono_domain_unlock (domain);
+	}
 	if (pdata.found != 1)
 		g_print ("thunk failed for %p from %p\n", target, code);
 	g_assert (pdata.found == 1);
 }
 
 static void
-arm_patch_general (MonoDomain *domain, guchar *code, const guchar *target)
+arm_patch_general (MonoDomain *domain, guchar *code, const guchar *target, MonoCodeManager *dyn_code_mp)
 {
 	guint32 *code32 = (void*)code;
 	guint32 ins = *code32;
@@ -2895,7 +3017,7 @@ arm_patch_general (MonoDomain *domain, guchar *code, const guchar *target)
 			}
 		}
 		
-		handle_thunk (domain, TRUE, code, target);
+		handle_thunk (domain, TRUE, code, target, dyn_code_mp);
 		return;
 	}
 
@@ -2998,7 +3120,7 @@ arm_patch_general (MonoDomain *domain, guchar *code, const guchar *target)
 void
 arm_patch (guchar *code, const guchar *target)
 {
-	arm_patch_general (NULL, code, target);
+	arm_patch_general (NULL, code, target, NULL);
 }
 
 /* 
@@ -3257,6 +3379,10 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 
 		switch (ins->opcode) {
 		case OP_MEMORY_BARRIER:
+			if (v6_supported) {
+				ARM_MOV_REG_IMM8 (code, ARMREG_R0, 0);
+				ARM_MCR (code, 15, 0, ARMREG_R0, 7, 10, 5);
+			}
 			break;
 		case OP_TLS_GET:
 #ifdef HAVE_AEABI_READ_TP
@@ -4508,7 +4634,7 @@ mono_arch_register_lowlevel_calls (void)
 	} while (0)
 
 void
-mono_arch_patch_code (MonoMethod *method, MonoDomain *domain, guint8 *code, MonoJumpInfo *ji, gboolean run_cctors)
+mono_arch_patch_code (MonoMethod *method, MonoDomain *domain, guint8 *code, MonoJumpInfo *ji, MonoCodeManager *dyn_code_mp, gboolean run_cctors)
 {
 	MonoJumpInfo *patch_info;
 	gboolean compile_aot = !run_cctors;
@@ -4581,7 +4707,7 @@ mono_arch_patch_code (MonoMethod *method, MonoDomain *domain, guint8 *code, Mono
 		default:
 			break;
 		}
-		arm_patch_general (domain, ip, target);
+		arm_patch_general (domain, ip, target, dyn_code_mp);
 	}
 }
 
@@ -4930,50 +5056,8 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 		code = emit_call_seq (cfg, code);
 	}
 
-	if (method->save_lmf) {
-		gboolean get_lmf_fast = FALSE;
-
-#ifdef HAVE_AEABI_READ_TP
-		gint32 lmf_addr_tls_offset = mono_get_lmf_addr_tls_offset ();
-
-		if (lmf_addr_tls_offset != -1) {
-			get_lmf_fast = TRUE;
-
-			mono_add_patch_info (cfg, code - cfg->native_code, MONO_PATCH_INFO_INTERNAL_METHOD, 
-								 (gpointer)"__aeabi_read_tp");
-			code = emit_call_seq (cfg, code);
-
-			ARM_LDR_IMM (code, ARMREG_R0, ARMREG_R0, lmf_addr_tls_offset);
-			get_lmf_fast = TRUE;
-		}
-#endif
-		if (!get_lmf_fast) {
-			mono_add_patch_info (cfg, code - cfg->native_code, MONO_PATCH_INFO_INTERNAL_METHOD, 
-								 (gpointer)"mono_get_lmf_addr");
-			code = emit_call_seq (cfg, code);
-		}
-		/* we build the MonoLMF structure on the stack - see mini-arm.h */
-		/* lmf_offset is the offset from the previous stack pointer,
-		 * alloc_size is the total stack space allocated, so the offset
-		 * of MonoLMF from the current stack ptr is alloc_size - lmf_offset.
-		 * The pointer to the struct is put in r1 (new_lmf).
-		 * r2 is used as scratch
-		 * The callee-saved registers are already in the MonoLMF structure
-		 */
-		code = emit_big_add (code, ARMREG_R1, ARMREG_SP, alloc_size - lmf_offset);
-		/* r0 is the result from mono_get_lmf_addr () */
-		ARM_STR_IMM (code, ARMREG_R0, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, lmf_addr));
-		/* new_lmf->previous_lmf = *lmf_addr */
-		ARM_LDR_IMM (code, ARMREG_R2, ARMREG_R0, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
-		ARM_STR_IMM (code, ARMREG_R2, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
-		/* *(lmf_addr) = r1 */
-		ARM_STR_IMM (code, ARMREG_R1, ARMREG_R0, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
-		/* Skip method (only needed for trampoline LMF frames) */
-		ARM_STR_IMM (code, ARMREG_SP, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, esp));
-		/* save the current IP */
-		ARM_MOV_REG_REG (code, ARMREG_R2, ARMREG_PC);
-		ARM_STR_IMM (code, ARMREG_R2, ARMREG_R1, G_STRUCT_OFFSET (MonoLMF, eip));
-	}
+	if (method->save_lmf)
+		code = emit_save_lmf (cfg, code, alloc_size - lmf_offset);
 
 	if (tracing)
 		code = mono_arch_instrument_prolog (cfg, mono_trace_enter_method, code, TRUE);
@@ -5075,14 +5159,9 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 		/* all but r0-r3, sp and pc */
 		pos += sizeof (MonoLMF) - (MONO_ARM_NUM_SAVED_REGS * sizeof (mgreg_t));
 		lmf_offset = pos;
-		/* r2 contains the pointer to the current LMF */
-		code = emit_big_add (code, ARMREG_R2, cfg->frame_reg, cfg->stack_usage - lmf_offset);
-		/* ip = previous_lmf */
-		ARM_LDR_IMM (code, ARMREG_IP, ARMREG_R2, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
-		/* lr = lmf_addr */
-		ARM_LDR_IMM (code, ARMREG_LR, ARMREG_R2, G_STRUCT_OFFSET (MonoLMF, lmf_addr));
-		/* *(lmf_addr) = previous_lmf */
-		ARM_STR_IMM (code, ARMREG_IP, ARMREG_LR, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
+
+		code = emit_restore_lmf (cfg, code, cfg->stack_usage - lmf_offset);
+
 		/* This points to r4 inside MonoLMF->iregs */
 		sp_adj = (sizeof (MonoLMF) - MONO_ARM_NUM_SAVED_REGS * sizeof (mgreg_t));
 		reg = ARMREG_R4;
@@ -5094,7 +5173,7 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 			reg ++;
 		}
 		/* point sp at the registers to restore: 10 is 14 -4, because we skip r0-r3 */
-		ARM_ADD_REG_IMM8 (code, ARMREG_SP, ARMREG_R2, sp_adj);
+		code = emit_big_add (code, ARMREG_SP, cfg->frame_reg, cfg->stack_usage - lmf_offset + sp_adj);
 		/* restore iregs */
 		ARM_POP (code, regmask); 
 	} else {
@@ -5839,8 +5918,13 @@ void
 mono_arch_set_target (char *mtriple)
 {
 	/* The GNU target triple format is not very well documented */
-	if (strstr (mtriple, "armv7"))
+	if (strstr (mtriple, "armv7")) {
+		v6_supported = TRUE;
 		v7_supported = TRUE;
+	}
+	if (strstr (mtriple, "armv6")) {
+		v6_supported = TRUE;
+	}
 	if (strstr (mtriple, "darwin")) {
 		v5_supported = TRUE;
 		thumb_supported = TRUE;

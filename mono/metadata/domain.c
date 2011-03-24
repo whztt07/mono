@@ -20,6 +20,7 @@
 #include <mono/utils/mono-logger-internal.h>
 #include <mono/utils/mono-membar.h>
 #include <mono/utils/mono-counters.h>
+#include <mono/utils/hazard-pointer.h>
 #include <mono/metadata/object.h>
 #include <mono/metadata/object-internals.h>
 #include <mono/metadata/domain-internals.h>
@@ -52,25 +53,25 @@ static guint32 appdomain_thread_id = -1;
 #if (defined(__i386__) || defined(__x86_64__)) && !defined(HOST_WIN32)
 #define NO_TLS_SET_VALUE
 #endif
- 
-#ifdef HAVE_KW_THREAD
 
-static __thread MonoDomain * tls_appdomain MONO_TLS_FAST;
+#ifdef MONO_HAVE_FAST_TLS
 
-#define GET_APPDOMAIN() tls_appdomain
+MONO_FAST_TLS_DECLARE(tls_appdomain);
+
+#define GET_APPDOMAIN() ((MonoDomain*)MONO_FAST_TLS_GET(tls_appdomain))
 
 #ifdef NO_TLS_SET_VALUE
 #define SET_APPDOMAIN(x) do { \
-	tls_appdomain = x; \
+	MONO_FAST_TLS_SET (tls_appdomain,x); \
 } while (FALSE)
 #else
 #define SET_APPDOMAIN(x) do { \
-	tls_appdomain = x; \
+	MONO_FAST_TLS_SET (tls_appdomain,x); \
 	TlsSetValue (appdomain_thread_id, x); \
 } while (FALSE)
 #endif
 
-#else /* !HAVE_KW_THREAD */
+#else /* !MONO_HAVE_FAST_TLS */
 
 #define GET_APPDOMAIN() ((MonoDomain *)TlsGetValue (appdomain_thread_id))
 #define SET_APPDOMAIN(x) TlsSetValue (appdomain_thread_id, x);
@@ -272,36 +273,6 @@ jit_info_table_free (MonoJitInfoTable *table)
 	mono_domain_unlock (domain);
 
 	g_free (table);
-}
-
-/* Can be called with hp==NULL, in which case it acts as an ordinary
-   pointer fetch.  It's used that way indirectly from
-   mono_jit_info_table_add(), which doesn't have to care about hazards
-   because it holds the respective domain lock. */
-static gpointer
-get_hazardous_pointer (gpointer volatile *pp, MonoThreadHazardPointers *hp, int hazard_index)
-{
-	gpointer p;
-
-	for (;;) {
-		/* Get the pointer */
-		p = *pp;
-		/* If we don't have hazard pointers just return the
-		   pointer. */
-		if (!hp)
-			return p;
-		/* Make it hazardous */
-		mono_hazard_pointer_set (hp, hazard_index, p);
-		/* Check that it's still the same.  If not, try
-		   again. */
-		if (*pp != p) {
-			mono_hazard_pointer_clear (hp, hazard_index);
-			continue;
-		}
-		break;
-	}
-
-	return p;
 }
 
 /* The jit_info_table is sorted in ascending order by the end
@@ -1284,6 +1255,7 @@ mono_init_internal (const char *filename, const char *exe_filename, const char *
 
 	mono_gc_base_init ();
 
+	MONO_FAST_TLS_INIT (tls_appdomain);
 	appdomain_thread_id = TlsAlloc ();
 
 	InitializeCriticalSection (&appdomains_mutex);
@@ -1954,6 +1926,11 @@ mono_domain_free (MonoDomain *domain, gboolean force)
 	mono_g_hash_table_destroy (domain->env);
 	domain->env = NULL;
 
+	if (domain->tlsrec_list) {
+		mono_thread_destroy_domain_tls (domain);
+		domain->tlsrec_list = NULL;
+	}
+
 	mono_reflection_cleanup_domain (domain);
 
 	if (domain->type_hash) {
@@ -2067,6 +2044,10 @@ mono_domain_free (MonoDomain *domain, gboolean force)
 	if (domain->generic_virtual_cases) {
 		g_hash_table_destroy (domain->generic_virtual_cases);
 		domain->generic_virtual_cases = NULL;
+	}
+	if (domain->generic_virtual_thunks) {
+		g_hash_table_destroy (domain->generic_virtual_thunks);
+		domain->generic_virtual_thunks = NULL;
 	}
 
 	DeleteCriticalSection (&domain->finalizable_objects_hash_lock);

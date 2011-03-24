@@ -221,18 +221,18 @@ all-local $(STD_TARGETS:=-local):
 	@:
 
 # Files needed to bootstrap C# compiler
-basic_files = mcs.exe mscorlib.dll System.dll System.Xml.dll Mono.Security.dll System.Core.dll
+basic_files = basic.exe mscorlib.dll System.dll System.Xml.dll Mono.Security.dll System.Core.dll
 monolite_files = $(basic_files:%=lib/monolite/%)
 
 lib/monolite:
 	$(MKINSTALLDIRS) $@
 
 $(monolite_files): | lib/monolite
-$(monolite_files): lib/monolite/%: lib/build/%
+$(monolite_files): lib/monolite/%: lib/basic/%
 	cp -p $< $@
 
-$(basic_files:%=lib/build/%):
-	cd $(topdir) && $(MAKE) profile-do--build--all NO_DIR_CHECK=1 SKIP_AOT=1
+$(basic_files:%=lib/basic/%):
+	cd $(topdir) && $(MAKE) profile-do--basic--all NO_DIR_CHECK=1 SKIP_AOT=1
 
 dist-default: $(monolite_files)
 dist-local: dist-default

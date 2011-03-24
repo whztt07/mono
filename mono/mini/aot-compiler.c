@@ -4402,6 +4402,7 @@ static void
 emit_trampolines (MonoAotCompile *acfg)
 {
 	char symbol [256];
+	char end_symbol [256];
 	int i, tramp_got_offset;
 	MonoAotTrampoline ntype;
 #ifdef MONO_ARCH_HAVE_FULL_AOT_TRAMPOLINES
@@ -4544,6 +4545,11 @@ emit_trampolines (MonoAotCompile *acfg)
 				g_assert_not_reached ();
 			}
 
+			sprintf (end_symbol, "%s_e", symbol);
+
+			if (acfg->aot_opts.write_symbols)
+				emit_local_symbol (acfg, symbol, end_symbol, TRUE);
+
 			emit_alignment (acfg, AOT_FUNC_ALIGNMENT);
 			emit_label (acfg, symbol);
 
@@ -4578,6 +4584,8 @@ emit_trampolines (MonoAotCompile *acfg)
 					acfg->trampoline_size [ntype] = tramp_size;
 				}
 			}
+
+			emit_label (acfg, end_symbol);
 		}
 
 		/* Reserve some entries at the end of the GOT for our use */
@@ -5302,7 +5310,7 @@ emit_llvm_file (MonoAotCompile *acfg)
 	 * then removing tailcallelim + the global opts, and adding a second gvn.
 	 */
 	opts = g_strdup ("-instcombine -simplifycfg");
-	opts = g_strdup ("-simplifycfg -domtree -domfrontier -scalarrepl -instcombine -simplifycfg -basiccg -prune-eh -inline -functionattrs -domtree -domfrontier -scalarrepl -simplify-libcalls -instcombine -simplifycfg -instcombine -simplifycfg -reassociate -domtree -loops -loopsimplify -domfrontier -loopsimplify -lcssa -loop-rotate -licm -lcssa -loop-unswitch -instcombine -scalar-evolution -loopsimplify -lcssa -iv-users -indvars -loop-deletion -loopsimplify -lcssa -loop-unroll -instcombine -memdep -gvn -memdep -memcpyopt -sccp -instcombine -domtree -memdep -dse -adce -simplifycfg -preverify -domtree -verify");
+	opts = g_strdup ("-simplifycfg -domtree -domfrontier -scalarrepl -instcombine -simplifycfg -basiccg -prune-eh -inline -functionattrs -domtree -domfrontier -scalarrepl -simplify-libcalls -instcombine -simplifycfg -instcombine -simplifycfg -reassociate -domtree -loops -loop-simplify -domfrontier -loop-simplify -lcssa -loop-rotate -licm -lcssa -loop-unswitch -instcombine -scalar-evolution -loop-simplify -lcssa -iv-users -indvars -loop-deletion -loop-simplify -lcssa -loop-unroll -instcombine -memdep -gvn -memdep -memcpyopt -sccp -instcombine -domtree -memdep -dse -adce -simplifycfg -preverify -domtree -verify");
 #if 1
 	command = g_strdup_printf ("%sopt -f %s -o temp.opt.bc temp.bc", acfg->aot_opts.llvm_path, opts);
 	printf ("Executing opt: %s\n", command);

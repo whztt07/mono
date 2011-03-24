@@ -47,14 +47,25 @@ namespace IKVM.Reflection.Writer
 		{
 			if (stream == null)
 			{
-				using (FileStream fs = new FileStream(moduleBuilder.FullyQualifiedName, FileMode.Create))
+				string fileName = moduleBuilder.FullyQualifiedName;
+				bool mono = System.Type.GetType("Mono.Runtime") != null;
+				if (mono)
+				{
+					try
+					{
+						// Mono mmaps the file, so unlink the previous version since it may be in use
+						File.Delete(fileName);
+					}
+					catch { }
+				}
+				using (FileStream fs = new FileStream(fileName, FileMode.Create))
 				{
 					WriteModuleImpl(keyPair, publicKey, moduleBuilder, fileKind, portableExecutableKind, imageFileMachine, resources, entryPointToken, fs);
 				}
 				// if we're running on Mono, mark the module as executable by using a Mono private API extension
-				if (System.Type.GetType("Mono.Runtime") != null)
+				if (mono)
 				{
-					File.SetAttributes(moduleBuilder.FullyQualifiedName, (FileAttributes)(unchecked((int)0x80000000)));
+					File.SetAttributes(fileName, (FileAttributes)(unchecked((int)0x80000000)));
 				}
 			}
 			else
@@ -88,13 +99,14 @@ namespace IKVM.Reflection.Writer
 				case ImageFileMachine.I386:
 					writer.Headers.FileHeader.Machine = IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_I386;
 					writer.Headers.FileHeader.Characteristics |= IMAGE_FILE_HEADER.IMAGE_FILE_32BIT_MACHINE;
+					writer.Headers.OptionalHeader.SizeOfStackReserve = moduleBuilder.GetStackReserve(0x100000);
 					break;
 				case ImageFileMachine.AMD64:
 					writer.Headers.FileHeader.Machine = IMAGE_FILE_HEADER.IMAGE_FILE_MACHINE_AMD64;
 					writer.Headers.FileHeader.Characteristics |= IMAGE_FILE_HEADER.IMAGE_FILE_LARGE_ADDRESS_AWARE;
 					writer.Headers.FileHeader.SizeOfOptionalHeader = 0xF0;
 					writer.Headers.OptionalHeader.Magic = IMAGE_OPTIONAL_HEADER.IMAGE_NT_OPTIONAL_HDR64_MAGIC;
-					writer.Headers.OptionalHeader.SizeOfStackReserve = 0x400000;
+					writer.Headers.OptionalHeader.SizeOfStackReserve = moduleBuilder.GetStackReserve(0x400000);
 					writer.Headers.OptionalHeader.SizeOfStackCommit = 0x4000;
 					writer.Headers.OptionalHeader.SizeOfHeapCommit = 0x2000;
 					break;
@@ -103,7 +115,7 @@ namespace IKVM.Reflection.Writer
 					writer.Headers.FileHeader.Characteristics |= IMAGE_FILE_HEADER.IMAGE_FILE_LARGE_ADDRESS_AWARE;
 					writer.Headers.FileHeader.SizeOfOptionalHeader = 0xF0;
 					writer.Headers.OptionalHeader.Magic = IMAGE_OPTIONAL_HEADER.IMAGE_NT_OPTIONAL_HDR64_MAGIC;
-					writer.Headers.OptionalHeader.SizeOfStackReserve = 0x400000;
+					writer.Headers.OptionalHeader.SizeOfStackReserve = moduleBuilder.GetStackReserve(0x400000);
 					writer.Headers.OptionalHeader.SizeOfStackCommit = 0x4000;
 					writer.Headers.OptionalHeader.SizeOfHeapCommit = 0x2000;
 					break;

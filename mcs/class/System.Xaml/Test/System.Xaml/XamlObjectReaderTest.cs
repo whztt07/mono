@@ -678,5 +678,70 @@ namespace MonoTests.System.Xaml
 			while (!xr.IsEof)
 				xr.Read ();
 		}
+
+		[Test]
+		public void Read_TypeConverterOnListMember ()
+		{
+			var obj = new SecondTest.TypeOtherAssembly ();
+			obj.Values.AddRange (new uint? [] {1, 2, 3});
+			var xr = new XamlObjectReader (obj);
+			Read_TypeConverterOnListMember (xr);
+		}
+
+		[Test]
+		public void Read_EnumContainer ()
+		{
+			var obj = new EnumContainer () { EnumProperty = EnumValueType.Two };
+			var xr = new XamlObjectReader (obj);
+			Read_EnumContainer (xr);
+		}
+
+		[Test]
+		public void Read_CollectionContentProperty ()
+		{
+			var obj = new CollectionContentProperty ();
+			for (int i = 0; i < 4; i++)
+				obj.ListOfItems.Add (new SimpleClass ());
+			var xr = new XamlObjectReader (obj);
+			Read_CollectionContentProperty (xr, false);
+		}
+
+		[Test]
+		public void Read_CollectionContentPropertyX ()
+		{
+			var obj = new CollectionContentPropertyX ();
+			var l = new List<object> ();
+			obj.ListOfItems.Add (l);
+			for (int i = 0; i < 4; i++)
+				l.Add (new SimpleClass ());
+			var xr = new XamlObjectReader (obj);
+			Read_CollectionContentPropertyX (xr, false);
+		}
+
+		[Test]
+		[Category ("NotWorking")] // only member ordering difference, maybe.
+		public void Read_AmbientPropertyContainer ()
+		{
+			var obj = new SecondTest.ResourcesDict ();
+			var t1 = new SecondTest.TestObject ();
+			obj.Add ("TestDictItem", t1);
+			var t2 = new SecondTest.TestObject ();
+			t2.TestProperty = t1;
+			obj.Add ("okay", t2);
+			var xr = new XamlObjectReader (obj);
+			Read_AmbientPropertyContainer (xr, false);
+		}
+
+		[Test]
+		[Category ("NotWorking")] // only member ordering difference, maybe.
+		public void Read_AmbientPropertyContainer2 ()
+		{
+			var obj = new SecondTest.ResourcesDict ();
+			var t1 = new SecondTest.TestObject ();
+			obj.Add ("TestDictItem", t1);
+			obj.Add ("okay", new SecondTest.ResourceExtension (t1));
+			var xr = new XamlObjectReader (obj);
+			Read_AmbientPropertyContainer (xr, true);
+		}
 	}
 }

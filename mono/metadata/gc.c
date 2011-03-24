@@ -1486,3 +1486,25 @@ mono_gc_reference_queue_free (MonoReferenceQueue *queue)
 	queue->should_be_deleted = TRUE;
 }
 
+gboolean klass_is_in_assembly(gpointer key, gpointer value, gpointer user_data);
+
+void
+mono_gc_finalize_assembly(MonoDomain* domain, MonoAssembly* assembly)
+{
+	int i;
+	GPtrArray *objs;
+
+	objs = g_ptr_array_new ();
+	g_hash_table_foreach (domain->finalizable_objects_hash, collect_objects, objs);
+	/* printf ("FINALIZING %d OBJECTS.\n", objs->len); */
+
+	for (i = 0; i < objs->len; ++i) {
+		MonoObject *o = (MonoObject*)g_ptr_array_index (objs, i);
+		if (klass_is_in_assembly(o->vtable->klass, NULL, assembly))
+		{
+			mono_gc_run_finalize(o, 0);
+		}
+	}
+
+	g_ptr_array_free (objs, TRUE);
+}

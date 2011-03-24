@@ -3203,7 +3203,7 @@ gboolean sig_in_assembly(gpointer key, gpointer value, gpointer user_data)
 }
 
 void clear_anon_gparam_cache();
-
+void mono_gc_finalize_assembly(MonoDomain* domain, MonoAssembly* assembly);
 /**
  * mono_assembly_close:
  * @assembly: the assembly to release.
@@ -3233,6 +3233,8 @@ mono_assembly_close (MonoAssembly *assembly)
 		mono_domain_lock (domain);
 
 		clear_anon_gparam_cache();
+
+		mono_gc_finalize_assembly(domain, assembly);
 
 		/*for (tmp = domain->domain_assemblies; tmp; tmp = tmp->next) {
 			MonoAssembly* ass = tmp->data;

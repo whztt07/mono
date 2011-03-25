@@ -3202,6 +3202,8 @@ gboolean sig_in_assembly(gpointer key, gpointer value, gpointer user_data)
 	return FALSE;
 }
 
+void mono_gc_finalize_assembly(MonoDomain *domain, MonoAssembly *assembly);
+
 /**
  * mono_assembly_close:
  * @assembly: the assembly to release.
@@ -3229,6 +3231,8 @@ mono_assembly_close (MonoAssembly *assembly)
 		}
 
 		mono_domain_lock (domain);
+
+		mono_gc_finalize_assembly(domain, assembly);
 
 		//clear_anon_gparam_cache(assembly->image);
 

@@ -3202,20 +3202,6 @@ gboolean sig_in_assembly(gpointer key, gpointer value, gpointer user_data)
 	return FALSE;
 }
 
-void clear_anon_gparam_cache(MonoImage* image)
-{
-	memset(image->var_cache_fast, 0, sizeof(image->var_cache_fast));
-	memset(image->mvar_cache_fast, 0, sizeof(image->var_cache_fast));
-	if (image->var_cache_slow) {
-		g_hash_table_destroy(image->var_cache_slow);
-		image->var_cache_slow = NULL;
-	}
-	if (image->mvar_cache_slow) {
-		g_hash_table_destroy(image->mvar_cache_slow);
-		image->mvar_cache_slow = NULL;
-	}
-}
-
 /**
  * mono_assembly_close:
  * @assembly: the assembly to release.
@@ -3244,7 +3230,7 @@ mono_assembly_close (MonoAssembly *assembly)
 
 		mono_domain_lock (domain);
 
-		clear_anon_gparam_cache(assembly->image);
+		//clear_anon_gparam_cache(assembly->image);
 
 		/*for (tmp = domain->domain_assemblies; tmp; tmp = tmp->next) {
 			MonoAssembly* ass = tmp->data;

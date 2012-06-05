@@ -548,6 +548,9 @@ namespace System.IO
 
 			try {
 				bool first = true;
+				if ((rattr & FileAttributes.Directory) == 0)
+					rattr |= FileAttributes.Normal;
+
 				if (((rattr & FileAttributes.ReparsePoint) == 0) && ((rattr & kind) != 0))
 					yield return s;
 				
@@ -564,6 +567,9 @@ namespace System.IO
 					
 					if ((rattr & FileAttributes.ReparsePoint) != 0)
 						continue;
+
+					if ((rattr & FileAttributes.Directory) == 0)
+						rattr |= FileAttributes.Normal;
 
 					if ((rattr & kind) != 0)
 						yield return s;

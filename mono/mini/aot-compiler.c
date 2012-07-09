@@ -150,6 +150,7 @@ typedef struct MonoAotCompile {
 	MonoImage *image;
 	GPtrArray *methods;
 	GHashTable *method_indexes;
+	GHashTable *method_sharable;
 	GHashTable *method_depth;
 	MonoCompile **cfgs;
 	int cfgs_size;
@@ -3280,8 +3281,8 @@ add_generic_class_with_depth (MonoAotCompile *acfg, MonoClass *klass, int depth,
 	iter = NULL;
 	while ((method = mono_class_get_methods (klass, &iter))) {
 		if (mono_method_is_generic_sharable_impl_full (method, FALSE, FALSE))
-			/* Already added */
-			continue;
+			/* Already added, notify compile_method() that method is sharable to compile required methods/types */
+			g_hash_table_insert (acfg->method_sharable, method, GUINT_TO_POINTER(1));
 
 		if (method->is_generic)
 			/* FIXME: */
@@ -3548,7 +3549,8 @@ add_generic_instances (MonoAotCompile *acfg)
 		 * generic definition.
 		 */
 		if (mono_method_is_generic_sharable_impl_full (method, FALSE, FALSE))
-			continue;
+			/* Already added, notify compile_method() that method is sharable to compile required methods/types */
+			g_hash_table_insert (acfg->method_sharable, method, GUINT_TO_POINTER(1));
 
 		/*
 		 * FIXME: Partially shared methods are not shared here, so we end up with
@@ -5560,6 +5562,13 @@ compile_method (MonoAotCompile *acfg, MonoMethod *method)
 		}
 	}
 
+	/* Method is sharable, its compilation was forced only to force instantiation of its required generic methods/types, it can be skipped. */
+	if (g_hash_table_lookup (acfg->method_sharable, method) != NULL) {
+		mono_destroy_compile (cfg);
+		mono_acfg_unlock (acfg);
+		return;
+	}
+
 	/* Determine whenever the method has GOT slots */
 	for (patch_info = cfg->patch_info; patch_info; patch_info = patch_info->next) {
 		switch (patch_info->type) {
@@ -7360,6 +7369,7 @@ acfg_create (MonoAssembly *ass, guint32 opts)
 	acfg->methods = g_ptr_array_new ();
 	acfg->method_indexes = g_hash_table_new (NULL, NULL);
 	acfg->method_depth = g_hash_table_new (NULL, NULL);
+	acfg->method_sharable = g_hash_table_new (NULL, NULL);
 	acfg->plt_offset_to_entry = g_hash_table_new (NULL, NULL);
 	acfg->patch_to_plt_entry = g_hash_table_new (mono_patch_info_hash, mono_patch_info_equal);
 	acfg->patch_to_got_offset = g_hash_table_new (mono_patch_info_hash, mono_patch_info_equal);
@@ -7411,6 +7421,7 @@ acfg_free (MonoAotCompile *acfg)
 	g_ptr_array_free (acfg->globals, TRUE);
 	g_ptr_array_free (acfg->unwind_ops, TRUE);
 	g_hash_table_destroy (acfg->method_indexes);
+	g_hash_table_destroy (acfg->method_sharable);
 	g_hash_table_destroy (acfg->method_depth);
 	g_hash_table_destroy (acfg->plt_offset_to_entry);
 	g_hash_table_destroy (acfg->patch_to_plt_entry);
